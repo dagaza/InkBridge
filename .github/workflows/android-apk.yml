@@ -1,0 +1,33 @@
+name: Android APK
+
+on:
+  pull_request:
+    paths:
+      - "android-virtual-pen/**"
+      - ".github/workflows/android-apk.yml"
+
+jobs:
+  build-debug:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Build debug APK
+        working-directory: android-virtual-pen
+        run: ./gradlew assembleDebug
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-virtual-pen-debug-apk
+          path: android-virtual-pen/app/build/outputs/apk/debug/app-debug.apk

@@ -1,0 +1,135 @@
+name: Release
+
+on:
+  push:
+    branches: ["main", "master"]
+    paths:
+      - "android-virtual-pen/**"
+      - "virtual-pen-linux-host/**"
+      - ".github/workflows/release.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      new_tag: ${{ steps.tagger.outputs.new_tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create version tag
+        id: tagger
+
+        uses: anothrnick/github-tag-action@v1
+
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEFAULT_BUMP: patch
+          RELEASE_BRANCHES: main,master
+          WITH_V: true
+
+  build-android:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Build debug APK
+        working-directory: android-virtual-pen
+        run: ./gradlew assembleDebug
+
+      - name: Rename APK
+        run: |
+          tag="${{ needs.version.outputs.new_tag }}"
+          cp android-virtual-pen/app/build/outputs/apk/debug/app-debug.apk "android-virtual-pen-${tag}-debug.apk"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-virtual-pen-debug-apk
+          path: android-virtual-pen-${{ needs.version.outputs.new_tag }}-debug.apk
+
+  build-linux:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake libusb-1.0-0-dev qt6-base-dev libgl1-mesa-dev
+
+      - name: Build Linux host
+        run: |
+          cmake -S virtual-pen-linux-host -B build
+          cmake --build build --config Release
+
+      - name: Package Linux host (tar.gz)
+        run: |
+          tag="${{ needs.version.outputs.new_tag }}"
+          cmake --install build --prefix appdir
+          tar -czf "virtual-pen-linux-host-${tag}-linux-x86_64.tar.gz" -C appdir .
+
+      - name: Package Linux host (deb)
+        run: |
+          tag="${{ needs.version.outputs.new_tag }}"
+          version="${tag#v}"
+          cmake --install build --prefix deb_root/usr
+          mkdir -p deb_root/DEBIAN
+          cat <<CONTROL > deb_root/DEBIAN/control
+          Package: virtual-pen
+          Version: ${version}
+          Architecture: amd64
+          Maintainer: Android Virtual Pen CI <ci@users.noreply.github.com>
+          Description: Host program for receiving pen input data from the Android virtual-pen app.
+          Depends: libqt6widgets6, qt6-qpa-plugins, libusb-1.0-0
+          CONTROL
+          dpkg-deb --build deb_root "virtual-pen-linux-host_${tag}_amd64.deb"
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages
+          path: |
+            virtual-pen-linux-host-${{ needs.version.outputs.new_tag }}-linux-x86_64.tar.gz
+            virtual-pen-linux-host_${{ needs.version.outputs.new_tag }}_amd64.deb
+
+  release:
+    needs: [version, build-android, build-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download APK
+        uses: actions/download-artifact@v4
+        with:
+          name: android-virtual-pen-debug-apk
+          path: ./dist
+
+      - name: Download Linux artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-packages
+          path: ./dist
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.version.outputs.new_tag }}
+          files: ./dist/*
+          generate_release_notes: true

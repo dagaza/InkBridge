@@ -1,0 +1,18 @@
+{
+  "name": "InkBridge Dev Env",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-vscode.cpptools",
+        "ms-vscode.cmake-tools",
+        "twxs.cmake"
+      ]
+    }
+  },
+  // This maps your local folder to /workspaces/inkbridge inside the container
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/inkbridge,type=bind",
+  "workspaceFolder": "/workspaces/inkbridge"
+}
