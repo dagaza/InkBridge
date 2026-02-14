@@ -1,274 +1,186 @@
-/*
- * Linux ADK - linux-adk.c
- *
- * Copyright (C) 2013 - Gary Bisson <bisson.gary@gmail.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
- * or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License
- * for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
- */
-
-#include <stdio.h>
-#include <string>
-#include <string.h>
-#include <stdlib.h>
-#include <signal.h>
-#include <linux/uinput.h>
-#include <libusb-1.0/libusb.h>
 #include "linux-adk.h"
-#include "virtualstylus.h"
+#include <iostream>
+#include <thread>
+#include <chrono>
+#include <cstring>
+#include <csignal>
 
-extern void accessory_main(accessory_t * acc, VirtualStylus * virtualStylys);
+// External legacy function - We will need to refactor this next!
+// Note: We changed the signature to accept our new C++ class
+extern void accessory_main(InkBridge::UsbConnection* conn, VirtualStylus* virtualStylus);
 
-volatile int stop_acc = 0;
-int verbose = 0;
+namespace InkBridge {
 
-std::string device = "18d1:4ee2";
-std::string manufacturer = "dzadobrischi";
-std::string model = "InkBridgeHost";
-std::string description = "InkBridge Desktop Client";
-std::string version = "1.0";
-std::string url = "https://github.com/dagaza/InkBridge";
-std::string serial = "INKBRIDGE001";
+// Global flag for signal handling
+volatile std::atomic<bool> stop_acc{false};
 
-static const accessory_t acc_default = {
-    .device = device.data(),
-    .manufacturer = manufacturer.data(),
-    .model = model.data(),
-    .description = description.data(),
-    .version = version.data(),
-    .url = url.data(),
-    .serial = serial.data(),
-};
-
-static int is_accessory_present(accessory_t * acc);
-static int init_accessory(accessory_t * acc, int aoa_max_version);
-static void fini_accessory(accessory_t * acc);
-
-
-static void show_version(char *name)
-{
-	printf("%s v%s\nreport bugs to %s\n", name, PACKAGE_VERSION,
-	       PACKAGE_BUGREPORT);
-	return;
+void signal_handler(int) {
+    std::cout << "SIGINT: Stopping accessory..." << std::endl;
+    stop_acc = true;
 }
 
-static void signal_handler(int signo)
-{
-	printf("SIGINT: Closing accessory\n");
-	stop_acc = 1;
+UsbConnection::UsbConnection(Config cfg) : config(std::move(cfg)) {
+    // Initialize LibUSB context (could be wrapped in a class too, but acceptable here)
+    libusb_init(nullptr);
+    // libusb_set_option(nullptr, LIBUSB_OPTION_LOG_LEVEL, LIBUSB_LOG_LEVEL_INFO);
 }
 
-int capture(string selectedDevice, VirtualStylus* virtualStylus)
-{
-	int arg_count = 1;
-	int no_app = 0;
-	int aoa_max_version = -1;
-	accessory_t acc = { NULL, NULL, 0, 0, 0, NULL, NULL, NULL, NULL, NULL,
-		NULL, NULL
-	};
+UsbConnection::~UsbConnection() {
+    handle.reset(); // Closes device handle via LibUsbDeleter
+    libusb_exit(nullptr);
+}
 
-	if (signal(SIGINT, signal_handler) == SIG_ERR)
-		printf("Cannot setup a signal handler...\n");
+int UsbConnection::startCapture(const std::string& selectedDevice, VirtualStylus* stylus) {
+    // Update config with user selection
+    config.deviceId = selectedDevice;
 
-	/* Disable buffering on stdout */
-    setbuf(stdout, NULL);
-    acc.device = selectedDevice.data();
-    acc.serial = acc_default.serial;
-    acc.manufacturer = acc_default.manufacturer;
-    acc.model = acc_default.model;
-    acc.version = acc_default.version;
+    if (std::signal(SIGINT, signal_handler) == SIG_ERR) {
+        std::cerr << "Error: Cannot setup signal handler." << std::endl;
+    }
+
+    // On Windows, AOA 2.0 has issues, limiting to 1.0 (logic preserved from original)
+    int maxVersion = -1;
 #ifdef WIN32
-	/* AOA 2.0 not supported on Windows (pthread/hid/audio deps) */
-	aoa_max_version = 1;
+    maxVersion = 1;
 #endif
-	if (init_accessory(&acc, aoa_max_version) != 0)
-		goto end;
 
-    accessory_main(&acc, virtualStylus);
-
-end:
-	fini_accessory(&acc);
-	return 0;
-}
-
-static int init_accessory(accessory_t * acc, int aoa_max_version)
-{
-	int ret;
-	uint16_t pid, vid;
-	char *tmp;
-	uint8_t buffer[2];
-	int tries = 10;
-
-	/* Initializing libusb */
-	ret = libusb_init(NULL);
-	if (ret != 0) {
-		printf("libusb init failed: %d\n", ret);
-		return ret;
-	}
-	if (verbose)
-		libusb_set_option(NULL, LIBUSB_OPTION_LOG_LEVEL, LIBUSB_LOG_LEVEL_DEBUG);
-
-	/* Check if device is not already in accessory mode */
-	if (is_accessory_present(acc))
-		return 0;
-
-	/* Getting product and vendor IDs */
-	vid = (uint16_t) strtol(acc->device, &tmp, 16);
-	pid = (uint16_t) strtol(tmp + 1, &tmp, 16);
-	printf("Looking for device %4.4x:%4.4x\n", vid, pid);
-
-	/* Trying to open it */
-	acc->handle = libusb_open_device_with_vid_pid(NULL, vid, pid);
-	if (acc->handle == NULL) {
-		printf("Unable to open device...\n");
-		return -1;
-	}
-
-	/* Now asking if device supports Android Open Accessory protocol */
-	ret = libusb_control_transfer(acc->handle,
-				      LIBUSB_ENDPOINT_IN |
-				      LIBUSB_REQUEST_TYPE_VENDOR,
-				      AOA_GET_PROTOCOL, 0, 0, buffer,
-				      sizeof(buffer), 0);
-	if (ret < 0) {
-		printf("Error getting protocol...\n");
-		return ret;
-	} else {
-		acc->aoa_version = ((buffer[1] << 8) | buffer[0]);
-		printf("Device supports AOA %d.0!\n", acc->aoa_version);
-	}
-	if ((aoa_max_version > 0) && ((int)acc->aoa_version > aoa_max_version)) {
-		acc->aoa_version = aoa_max_version;
-		printf("Limiting AOA to version %d.0!\n", acc->aoa_version);
-	}
-
-	/* Some Android devices require a waiting period between transfer calls */
-	usleep(10000);
-
-	/* In case of a no_app accessory, the version must be >= 2 */
-	if ((acc->aoa_version < 2) && !acc->manufacturer) {
-		printf("Connecting without an Android App only for AOA 2.0\n");
-		return -1;
-	}
-
-	printf("Sending identification to the device\n");
-
-
-    if (acc->manufacturer) {
-        printf(" sending manufacturer: %s\n", acc->manufacturer);
-        ret = libusb_control_transfer(acc->handle,
-                                      LIBUSB_ENDPOINT_OUT
-                                          | LIBUSB_REQUEST_TYPE_VENDOR,
-                                      AOA_SEND_IDENT, 0,
-                                      AOA_STRING_MAN_ID,
-                                      (uint8_t *) acc->manufacturer,
-                                      strlen(acc->manufacturer) + 1, 0);
-        if (ret < 0)
-            goto error;
+    if (initAccessory(maxVersion) != 0) {
+        std::cerr << "Failed to initialize accessory." << std::endl;
+        return -1;
     }
 
-    if (acc->model) {
-        printf(" sending model: %s\n", acc->model);
-        ret = libusb_control_transfer(acc->handle,
-                                      LIBUSB_ENDPOINT_OUT
-                                          | LIBUSB_REQUEST_TYPE_VENDOR,
-                                      AOA_SEND_IDENT, 0,
-                                      AOA_STRING_MOD_ID,
-                                      (uint8_t *) acc->model,
-                                      strlen(acc->model) + 1, 0);
-        if (ret < 0)
-            goto error;
+    // Call the main loop (defined in accessory.cpp)
+    // We pass 'this' because we are the new "Accessory Context"
+    accessory_main(this, stylus);
+
+    return 0;
+}
+
+bool UsbConnection::isAccessoryPresent() {
+    // Try opening known Google Accessory PIDs
+    const uint16_t VID = 0x18D1;
+    const uint16_t PIDS[] = {0x2D00, 0x2D01};
+
+    for (uint16_t pid : PIDS) {
+        libusb_device_handle* raw_handle = libusb_open_device_with_vid_pid(nullptr, VID, pid);
+        if (raw_handle) {
+            std::cout << "Found accessory " << std::hex << VID << ":" << pid << std::dec << std::endl;
+            // Transfer ownership to unique_ptr
+            handle.reset(raw_handle);
+            return true;
+        }
+    }
+    return false;
+}
+
+void UsbConnection::sendString(uint16_t index, const std::string& str) {
+    if (str.empty()) return;
+
+    std::cout << "Sending string ID " << index << ": " << str << std::endl;
+    
+    // +1 for null terminator
+    int ret = libusb_control_transfer(handle.get(),
+                                      LIBUSB_ENDPOINT_OUT | LIBUSB_REQUEST_TYPE_VENDOR,
+                                      52, // AOA_SEND_IDENT
+                                      0,
+                                      index,
+                                      (unsigned char*)str.c_str(),
+                                      static_cast<uint16_t>(str.length() + 1),
+                                      0);
+    if (ret < 0) {
+        throw std::runtime_error("Failed to send string: " + str);
+    }
+}
+
+int UsbConnection::initAccessory(int maxAoaVersion) {
+    using namespace std::chrono_literals;
+
+    int ret;
+    int tries = 10;
+
+    // 1. Check if already in accessory mode
+    if (isAccessoryPresent()) {
+        return 0;
     }
 
+    // 2. Parse VID:PID from string (e.g., "18d1:4ee2")
+    size_t colonPos = config.deviceId.find(':');
+    if (colonPos == std::string::npos) {
+        std::cerr << "Invalid device format: " << config.deviceId << std::endl;
+        return -1;
+    }
 
-    printf(" sending version: %s\n", acc->version);
-    ret = libusb_control_transfer(acc->handle,
-                                  LIBUSB_ENDPOINT_OUT |
-                                      LIBUSB_REQUEST_TYPE_VENDOR,
-                                  AOA_SEND_IDENT, 0, AOA_STRING_VER_ID,
-                                  (uint8_t *) acc->version,
-                                  strlen(acc->version) + 1, 0);
-    if (ret < 0)
-        goto error;
+    uint16_t vid = (uint16_t)std::stoi(config.deviceId.substr(0, colonPos), nullptr, 16);
+    uint16_t pid = (uint16_t)std::stoi(config.deviceId.substr(colonPos + 1), nullptr, 16);
 
+    std::cout << "Looking for device " << std::hex << vid << ":" << pid << std::dec << std::endl;
 
-	printf("Turning the device in Accessory mode\n");
-	ret = libusb_control_transfer(acc->handle,
-				      LIBUSB_ENDPOINT_OUT |
-				      LIBUSB_REQUEST_TYPE_VENDOR,
-				      AOA_START_ACCESSORY, 0, 0, NULL, 0, 0);
-	if (ret < 0)
-		goto error;
+    // 3. Open generic device
+    libusb_device_handle* raw_handle = libusb_open_device_with_vid_pid(nullptr, vid, pid);
+    if (!raw_handle) {
+        std::cerr << "Unable to open device." << std::endl;
+        return -1;
+    }
+    // Temporary owner until we switch to accessory mode
+    std::unique_ptr<libusb_device_handle, LibUsbDeleter> tempHandle(raw_handle);
 
-	/* Let some time for the new enumeration to happen */
-	usleep(10000);
+    // 4. Check AOA Protocol Version
+    unsigned char buffer[2];
+    ret = libusb_control_transfer(tempHandle.get(),
+                                  LIBUSB_ENDPOINT_IN | LIBUSB_REQUEST_TYPE_VENDOR,
+                                  51, // AOA_GET_PROTOCOL
+                                  0, 0, buffer, sizeof(buffer), 0);
+    
+    if (ret < 0) {
+        std::cerr << "Device does not support AOA." << std::endl;
+        return ret;
+    }
 
-	/* Connect to the Accessory */
-	while (tries--) {
-		if (is_accessory_present(acc))
-			break;
-		else if (!tries)
-			goto error;
-		else
-			sleep(1);
-	}
+    aoaVersion = (buffer[1] << 8) | buffer[0];
+    std::cout << "Device supports AOA " << aoaVersion << ".0" << std::endl;
 
-	return 0;
+    if (maxAoaVersion > 0 && aoaVersion > (uint32_t)maxAoaVersion) {
+        aoaVersion = maxAoaVersion;
+    }
 
-error:
-	printf("Accessory init failed: %d\n", ret);
-	return -1;
+    std::this_thread::sleep_for(10ms);
+
+    // 5. Send Identification Strings
+    try {
+        // We use the raw handle here, helper function uses handle.get()
+        // We temporarily move ownership to member variable for helper use
+        handle = std::move(tempHandle); 
+        
+        sendString(0, config.manufacturer); // AOA_STRING_MAN_ID
+        sendString(1, config.model);        // AOA_STRING_MOD_ID
+        sendString(3, config.version);      // AOA_STRING_VER_ID
+        
+        // 6. Switch to Accessory Mode
+        std::cout << "Requesting accessory mode switch..." << std::endl;
+        ret = libusb_control_transfer(handle.get(),
+                                      LIBUSB_ENDPOINT_OUT | LIBUSB_REQUEST_TYPE_VENDOR,
+                                      53, // AOA_START_ACCESSORY
+                                      0, 0, nullptr, 0, 0);
+        if (ret < 0) throw std::runtime_error("Failed to start accessory mode");
+
+        // Release handle (device will disconnect and reappear)
+        handle.reset(); 
+    } catch (const std::exception& e) {
+        std::cerr << "Error during init: " << e.what() << std::endl;
+        return -1;
+    }
+
+    // 7. Re-connect Loop
+    std::this_thread::sleep_for(100ms); // Wait for re-enumeration
+    while (tries--) {
+        if (isAccessoryPresent()) {
+            return 0; 
+        }
+        std::this_thread::sleep_for(1s);
+    }
+
+    std::cerr << "Timed out waiting for accessory to reappear." << std::endl;
+    return -1;
 }
 
-static int is_accessory_present(accessory_t * acc)
-{
-	struct libusb_device_handle *handle;
-	uint16_t vid = AOA_ACCESSORY_VID;
-	uint16_t pid = 0;
-
-	/* Trying to open all the AOA IDs possible */
-	pid = AOA_ACCESSORY_PID;
-	handle = libusb_open_device_with_vid_pid(NULL, vid, pid);
-	if (handle != NULL)
-		goto claim;
-
-	pid = AOA_ACCESSORY_ADB_PID;
-	handle = libusb_open_device_with_vid_pid(NULL, vid, pid);
-	if (handle != NULL)
-		goto claim;
-
-	return 0;
-
-claim:
-	printf("Found accessory %4.4x:%4.4x\n", vid, pid);
-	acc->handle = handle;
-	acc->vid = vid;
-	acc->pid = pid;
-	return 1;
-}
-
-static void fini_accessory(accessory_t * acc)
-{
-	printf("Closing USB device\n");
-
-	if (acc->handle != NULL) {
-		libusb_release_interface(acc->handle, 0);
-		libusb_close(acc->handle);
-	}
-
-	libusb_exit(NULL);
-
-	return;
-}
-
+} // namespace InkBridge

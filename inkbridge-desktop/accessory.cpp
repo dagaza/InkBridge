@@ -18,155 +18,138 @@
  * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
  */
 
-#include <stdio.h>
-#include <string>
-#include <string.h>
-#include <stdlib.h>
-#include <iostream>
-#include <libusb-1.0/libusb.h>
-#include <QDebug>
-#include "mainwindow.h"
-#include "virtualstylus.h"
 #include "accessory.h"
 #include "linux-adk.h"
 #include "protocol.h"
+#include "virtualstylus.h"
+#include "mainwindow.h"
 
-// Compile-time check to ensure struct packing is correct on this platform
-static_assert(sizeof(PenPacket) == 14, "FATAL ERROR: Struct packing failed! Size is not 14 bytes.");
+#include <iostream>
+#include <vector>
+#include <atomic>
+#include <libusb-1.0/libusb.h>
+#include <QDebug>
 
 using namespace std;
 
-void extractAccessoryEventData(AccessoryEventData * accessoryEventData,
-                                              unsigned char* dataBuffer, int size)
-{
-    // Note: The loop in accessory_main now handles the size check, but we keep this for safety
-    if (size < (int)sizeof(PenPacket)) return;
-
-    PenPacket* packet = reinterpret_cast<PenPacket*>(dataBuffer);
-    
-    // Debug output moved to main loop to avoid spamming for every sub-packet
-    // unless strictly necessary. Keeping logic here if called individually.
-
-    accessoryEventData->toolType = packet->toolType;
-    accessoryEventData->action = packet->action;
-    accessoryEventData->x = packet->x;
-    accessoryEventData->y = packet->y;
-    accessoryEventData->pressure = (float)packet->pressure / 1000.0f;
+// Import the stop signal from linux-adk.cpp
+namespace InkBridge {
+    extern volatile std::atomic<bool> stop_acc;
 }
 
-bool parseAccessoryEventDataLine(const string &line, AccessoryEventData * accessoryEventData){
-    array<string, 5> parts;
-    size_t start = 0;
-    int index = 0;
-    for(size_t i = 0; i < line.size() && index < 5; i++){
-        if(line[i] == ','){
-            parts[index] = line.substr(start, i - start);
-            start = i + 1;
-            index++;
-        }
-    }
-    if(index < 5){
-        return false;
-    }
+// Legacy constants for AOA
+#define AOA_ACCESSORY_INTERFACE 0
+#define AOA_ACCESSORY_EP_IN     0x81
 
-    char * endPtr = nullptr;
-    long toolType = std::strtol(parts[0].c_str(), &endPtr, 10);
-    if(endPtr == parts[0].c_str() || *endPtr != '\0'){
-        return false;
-    }
-    long action = std::strtol(parts[1].c_str(), &endPtr, 10);
-    if(endPtr == parts[1].c_str() || *endPtr != '\0'){
-        return false;
-    }
-    long x = std::strtol(parts[2].c_str(), &endPtr, 10);
-    if(endPtr == parts[2].c_str() || *endPtr != '\0'){
-        return false;
-    }
-    long y = std::strtol(parts[3].c_str(), &endPtr, 10);
-    if(endPtr == parts[3].c_str() || *endPtr != '\0'){
-        return false;
-    }
-    double pressure = std::strtod(parts[4].c_str(), &endPtr);
-    if(endPtr == parts[4].c_str()){
-        return false;
-    }
-
-    accessoryEventData->toolType = static_cast<int>(toolType);
-    accessoryEventData->action = static_cast<int>(action);
-    accessoryEventData->x = static_cast<int>(x);
-    accessoryEventData->y = static_cast<int>(y);
-    accessoryEventData->pressure = static_cast<float>(pressure);
-    return true;
+// ----------------------------------------------------------------------------
+// Helper: Extract Data (Refactored for Safety)
+// ----------------------------------------------------------------------------
+static void fillEventData(AccessoryEventData& data, const PenPacket* packet) {
+    data.toolType = packet->toolType;
+    data.action = packet->action;
+    data.x = packet->x;
+    data.y = packet->y;
+    // Normalize pressure to 0.0 - 1.0 range
+    data.pressure = static_cast<float>(packet->pressure) / 1000.0f;
 }
 
-void accessory_main(accessory_t * acc, VirtualStylus* virtualStylus)
+// ----------------------------------------------------------------------------
+// Main Capture Loop
+// ----------------------------------------------------------------------------
+void accessory_main(InkBridge::UsbConnection* conn, VirtualStylus* virtualStylus)
 {
+    if (!conn || !virtualStylus) return;
+
     int ret = 0;
-    /* If we have an accessory interface */
-    if ((acc->pid != AOA_AUDIO_ADB_PID) && (acc->pid != AOA_AUDIO_PID)) {
-        unsigned char acc_buf[512];
-        int transferred;
-        int errors = 20;
+    int transferred = 0;
+    unsigned char acc_buf[512]; // Standard USB High-Speed Bulk packet size
 
-        /* Claiming first (accessory )interface from the opened device */
-        ret = libusb_claim_interface(acc->handle, AOA_ACCESSORY_INTERFACE);
-        if (ret != 0) {
-            printf("Error %d claiming interface...\n", ret);
-            return;
-        }
+    // Claim the AOA interface
+    ret = libusb_claim_interface(conn->getHandle(), AOA_ACCESSORY_INTERFACE);
+    if (ret != 0) {
+        cerr << "Error claiming interface: " << libusb_error_name(ret) << endl;
+        return;
+    }
 
-        /* Snooping loop; Display every data received from device */
-        AccessoryEventData * accessoryEventData = new AccessoryEventData();
-        
-        while (!stop_acc) {
-            ret = libusb_bulk_transfer(acc->handle,
-                         AOA_ACCESSORY_EP_IN, acc_buf,
-                         sizeof(acc_buf), &transferred,
-                         200);
+    cout << "Accessory interface claimed. Starting capture loop..." << endl;
 
-            if (ret < 0) {
-                if (ret == LIBUSB_ERROR_TIMEOUT)
-                    continue;
-                printf("bulk transfer error %d\n", ret);
-                if (--errors == 0)
-                    break;
-                else
-                    sleep(1);
+    // Stack allocation for event data (Performance optimization)
+    AccessoryEventData eventData;
+
+    while (!InkBridge::stop_acc) {
+        ret = libusb_bulk_transfer(conn->getHandle(),
+                                   AOA_ACCESSORY_EP_IN,
+                                   acc_buf,
+                                   sizeof(acc_buf),
+                                   &transferred,
+                                   200); // 200ms timeout
+
+        if (ret < 0) {
+            if (ret == LIBUSB_ERROR_TIMEOUT) {
+                continue; // Normal timeout, retry
             }
-
-            // --- CHANGED: Loop through the buffer to handle batched events ---
-            int processed = 0;
-            int packetCount = 0; // Tracks the index within this specific USB transfer
+            cerr << "Bulk transfer error: " << libusb_error_name(ret) << endl;
             
-            if(MainWindow::isDebugMode && transferred > 0){
-                 // Optional: Print total bytes received for this block
-                 // printf("Received %d bytes (%d packets total)\n", transferred, transferred / (int)sizeof(PenPacket));
-            }
-
-            while (processed + (int)sizeof(PenPacket) <= transferred) {
-                // Point to the current 14-byte chunk in the buffer
-                unsigned char* currentPayload = acc_buf + processed;
-
-                // Parse this specific chunk into our data structure
-                extractAccessoryEventData(accessoryEventData, currentPayload, sizeof(PenPacket));
-
-                // Logging specific packet details with a clean index
-                if (MainWindow::isDebugMode) {
-                     qDebug() << "Packet [" << packetCount << "]:" 
-                              << "X:" << accessoryEventData->x 
-                              << "Y:" << accessoryEventData->y
-                              << "P:" << accessoryEventData->pressure;
-                }
-
-                // Inject event into the virtual stylus driver
-                virtualStylus->handleAccessoryEventData(accessoryEventData);
-
-                // Advance to the next chunk and increment counter
-                processed += sizeof(PenPacket);
-                packetCount++;
-            }
-            // ----------------------------------------------------------------
+            // If device was unplugged, exit loop
+            if (ret == LIBUSB_ERROR_NO_DEVICE) break;
+            
+            break;
         }
-        delete accessoryEventData;
+
+        if (transferred == 0) continue;
+
+        // --- Process Batched Packets ---
+        int processed = 0;
+
+        while (processed + (int)sizeof(PenPacket) <= transferred) {
+            // zero-copy cast to our protocol struct
+            const PenPacket* packet = reinterpret_cast<const PenPacket*>(acc_buf + processed);
+            
+            fillEventData(eventData, packet);
+
+            if (MainWindow::isDebugMode) {
+                // Throttle logs slightly or keep as is for deep debugging
+                qDebug() << "Packet [ T:" << eventData.toolType 
+                         << " A:" << eventData.action
+                         << " P:" << eventData.pressure 
+                         << "]";
+            }
+
+            virtualStylus->handleAccessoryEventData(&eventData);
+
+            processed += sizeof(PenPacket);
+        }
+    }
+
+    cout << "Capture loop finished." << endl;
+}
+
+// ----------------------------------------------------------------------------
+// Legacy CSV Parser (Preserved)
+// ----------------------------------------------------------------------------
+bool parseAccessoryEventDataLine(const string &line, AccessoryEventData * accessoryEventData) {
+    // Basic CSV parsing logic preserved for legacy file playback features
+    size_t start = 0;
+    size_t end = line.find(',');
+    int index = 0;
+    string parts[5];
+
+    while (end != string::npos && index < 5) {
+        parts[index++] = line.substr(start, end - start);
+        start = end + 1;
+        end = line.find(',', start);
+    }
+    if (index < 4) return false; // Need at least 4 parts
+    parts[index] = line.substr(start); // Last part
+
+    try {
+        accessoryEventData->toolType = stoi(parts[0]);
+        accessoryEventData->action = stoi(parts[1]);
+        accessoryEventData->x = stoi(parts[2]);
+        accessoryEventData->y = stoi(parts[3]);
+        accessoryEventData->pressure = stof(parts[4]);
+        return true;
+    } catch (...) {
+        return false;
     }
 }

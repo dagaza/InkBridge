@@ -1,86 +1,64 @@
-/*
- * Linux ADK - linux-adk.h
- *
- * Copyright (C) 2013 - Gary Bisson <bisson.gary@gmail.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
- * or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License
- * for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
- */
+#ifndef LINUX_ADK_H
+#define LINUX_ADK_H
 
-#ifndef _LINUX_ADK_H_
-#define _LINUX_ADK_H_
-
-#include <stdint.h>
-#include <unistd.h>
+#include <string>
+#include <memory>
+#include <libusb-1.0/libusb.h>
 #include "virtualstylus.h"
 
+namespace InkBridge {
 
-/* Android Open Accessory protocol defines */
-#define AOA_GET_PROTOCOL		51
-#define AOA_SEND_IDENT			52
-#define AOA_START_ACCESSORY		53
-#define AOA_REGISTER_HID		54
-#define AOA_UNREGISTER_HID		55
-#define AOA_SET_HID_REPORT_DESC		56
-#define AOA_SEND_HID_EVENT		57
-#define AOA_AUDIO_SUPPORT		58
+// Forward declaration
+class UsbConnection;
 
-/* String IDs */
-#define AOA_STRING_MAN_ID		0
-#define AOA_STRING_MOD_ID		1
-#define AOA_STRING_DSC_ID		2
-#define AOA_STRING_VER_ID		3
-#define AOA_STRING_URL_ID		4
-#define AOA_STRING_SER_ID		5
+// Moved OUTSIDE the class to fix GCC build error
+struct UsbConnectionConfig {
+    std::string deviceId = "18d1:4ee2";
+    std::string manufacturer = "dzadobrischi";
+    std::string model = "InkBridgeHost";
+    std::string description = "InkBridge Desktop Client";
+    std::string version = "1.0";
+    std::string url = "https://github.com/dagaza/InkBridge";
+    std::string serial = "INKBRIDGE001";
+};
 
-/* Product IDs / Vendor IDs */
-#define AOA_ACCESSORY_VID		0x18D1	/* Google */
-#define AOA_ACCESSORY_PID		0x2D00	/* accessory */
-#define AOA_ACCESSORY_ADB_PID		0x2D01	/* accessory + adb */
-#define AOA_AUDIO_PID			0x2D02	/* audio */
-#define AOA_AUDIO_ADB_PID		0x2D03	/* audio + adb */
-#define AOA_ACCESSORY_AUDIO_PID		0x2D04	/* accessory + audio */
-#define AOA_ACCESSORY_AUDIO_ADB_PID	0x2D05	/* accessory + audio + adb */
+/**
+ * @brief Manages the Low-Level USB AOA negotiation.
+ */
+class UsbConnection {
+public:
+    // Alias to keep existing code working
+    using Config = UsbConnectionConfig;
 
-/* Endpoint Addresses TODO get from interface descriptor */
-#define AOA_ACCESSORY_EP_IN		0x81
-#define AOA_ACCESSORY_EP_OUT		0x02
-#define AOA_ACCESSORY_INTERFACE		0x00
+    UsbConnection(Config config = Config{});
+    ~UsbConnection();
 
-/* App defines */
-#define PACKAGE_VERSION		"0.4"
-#define PACKAGE_BUGREPORT	"dan.zadobrischi@gmail.com"
+    // Disable copying
+    UsbConnection(const UsbConnection&) = delete;
+    UsbConnection& operator=(const UsbConnection&) = delete;
 
-/* Variable to stop accessory */
-extern volatile int stop_acc;
+    int startCapture(const std::string& deviceId, VirtualStylus* stylus);
+    libusb_device_handle* getHandle() const { return handle.get(); }
 
-/* Structures */
-typedef struct _accessory_t {
-	struct libusb_device_handle *handle;
-	struct libusb_transfer *transfer;
-	uint32_t aoa_version;
-	uint16_t vid;
-	uint16_t pid;
-	char *device;
-	char *manufacturer;
-	char *model;
-	char *description;
-	char *version;
-	char *url;
-	char *serial;
-} accessory_t;
+private:
+    struct LibUsbDeleter {
+        void operator()(libusb_device_handle* h) const {
+            if (h) {
+                libusb_release_interface(h, 0);
+                libusb_close(h);
+            }
+        }
+    };
 
-int capture(string selectedDevice, VirtualStylus * mainWindow);
+    std::unique_ptr<libusb_device_handle, LibUsbDeleter> handle;
+    Config config;
+    uint32_t aoaVersion = 0;
 
-#endif /* _LINUX_ADK_H_ */
+    int initAccessory(int maxAoaVersion);
+    bool isAccessoryPresent();
+    void sendString(uint16_t index, const std::string& str);
+};
+
+} // namespace InkBridge
+
+#endif // LINUX_ADK_H
