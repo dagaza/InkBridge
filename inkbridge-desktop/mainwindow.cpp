@@ -46,6 +46,14 @@ MainWindow::MainWindow(QWidget *parent)
     dialog = new QDialog();
     ui->setupUi(this);
 
+    // Connect the checkbox to the lambda function
+    connect(ui->cbSwapAxis, &QCheckBox::toggled, this, [=](bool checked){
+        if(this->virtualStylus != nullptr){
+            this->virtualStylus->swapAxis = checked;
+            qDebug() << "Swap Axis set to:" << checked;
+        }
+    });
+
     // --- MONITOR SELECTOR SETUP (FIXED POSITION) ---
     // 1. Shrink the USB List slightly to make room
     ui->usbDevicesListWidget->setGeometry(30, 60, 331, 160);

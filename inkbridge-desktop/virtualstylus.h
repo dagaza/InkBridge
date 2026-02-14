@@ -20,6 +20,8 @@ public:
     void setInputResolution(int width, int height); 
     // ---------------------
 
+    bool swapAxis = false;
+
 private:
     int fd;
     bool isPenActive;

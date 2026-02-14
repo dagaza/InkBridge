@@ -19,5 +19,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "virtual-pen"
+rootProject.name = "InkBridge"
 include(":app")

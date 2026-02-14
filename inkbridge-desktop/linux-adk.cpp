@@ -34,12 +34,12 @@ volatile int stop_acc = 0;
 int verbose = 0;
 
 std::string device = "18d1:4ee2";
-std::string manufacturer = "mbeliveau";
-std::string model = "VirtualStylusHost";
-std::string description = "Linux Virtual Stylus Host";
+std::string manufacturer = "dzadobrischi";
+std::string model = "InkBridgeHost";
+std::string description = "InkBridge Desktop Client";
 std::string version = "1.0";
-std::string url = "https://github.com/Mathieu-Beliveau/android-pen-emulator";
-std::string serial = "0000000012345678";
+std::string url = "https://github.com/dagaza/InkBridge";
+std::string serial = "INKBRIDGE001";
 
 static const accessory_t acc_default = {
     .device = device.data(),

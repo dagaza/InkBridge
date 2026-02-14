@@ -4,7 +4,7 @@
 #include <QComboBox>  // <--- Add this include at the top
 #include <QScreen>    // <--- Add this include at the top
 #include <QRect>      // <--- Add this include at the top
-#include "virtualstylus.h" // <--- CRITICAL: Make sure this include is here!
+#include "virtualstylus.h" 
 #include <QVector> // <--- Add this include for QVector
 #include <QListWidgetItem>
 #include <QMainWindow>

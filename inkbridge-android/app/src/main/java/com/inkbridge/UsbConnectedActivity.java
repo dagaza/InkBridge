@@ -1,18 +1,10 @@
-package com.virtual_pen;
+package com.inkbridge;
 
-import static android.content.ContentValues.TAG;
-
-import android.annotation.SuppressLint;
-import android.app.AlertDialog;
-import android.app.PendingIntent;
-import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
-import android.content.IntentFilter;
 import android.hardware.usb.UsbAccessory;
 import android.hardware.usb.UsbManager;
 import android.os.Bundle;
-import android.util.Log;
 import android.view.View;
 
 import androidx.activity.EdgeToEdge;

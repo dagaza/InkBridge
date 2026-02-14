@@ -1,8 +1,9 @@
-Android Virtual Pen is licensed under the GNU Affero General Public License, version
+InkBridge is licensed under the GNU Affero General Public License, version
 3 or later. Contributed work is licensed under the 3-Clause BSD License.
 See CONTRIBUTORS for details.
 
-    Copyright (C) 2020-Present Android Virtual Pen
+    Copyright (C) 2020-2026 Android Virtual Pen
+    Copyright (C) 2026-Present InkBridge
 
                     GNU AFFERO GENERAL PUBLIC LICENSE
                        Version 3, 19 November 2007

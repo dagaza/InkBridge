@@ -1,4 +1,4 @@
-package com.virtual_pen;
+package com.inkbridge;
 
 import static android.content.ContentValues.TAG;
 

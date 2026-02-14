@@ -64,40 +64,52 @@ void VirtualStylus::handleAccessoryEventData(AccessoryEventData * accessoryEvent
         isPenActive = true; 
 
         // --- 3. CALCULATE COORDINATES ---
-        int32_t finalX = 0;
-        int32_t finalY = 0;
+            int32_t finalX = 0;
+            int32_t finalY = 0;
 
-        if (!targetScreenGeometry.isEmpty() && inputWidth > 0 && inputHeight > 0) {
-            // [MONITOR MAPPING LOGIC]
-            
-            // A. Rotation (Landscape Fix)
-            double rotatedX = accessoryEventData->y; 
-            double rotatedY = inputWidth - accessoryEventData->x; 
+            if (!targetScreenGeometry.isEmpty() && inputWidth > 0 && inputHeight > 0) {
+                
+                double calcX, calcY;
+                double maxInputX, maxInputY;
 
-            // B. Percentage
-            double xPercent = rotatedX / (double)inputHeight; 
-            double yPercent = rotatedY / (double)inputWidth;
+                if (this->swapAxis) {
+                    // SWAPPED MODE: Tablet Y -> Monitor X
+                    calcX = accessoryEventData->y;
+                    calcY = inputWidth - accessoryEventData->x; // Flip X to match orientation
+                    maxInputX = inputHeight; // The "width" of the input is now the tablet's height
+                    maxInputY = inputWidth;
+                } else {
+                    // NORMAL MODE: Tablet X -> Monitor X
+                    calcX = accessoryEventData->x;
+                    calcY = accessoryEventData->y;
+                    maxInputX = inputWidth;
+                    maxInputY = inputHeight;
+                }
 
-            // C. Monitor Offset
-            double monitorPixelX = targetScreenGeometry.x() + (xPercent * targetScreenGeometry.width());
-            double monitorPixelY = targetScreenGeometry.y() + (yPercent * targetScreenGeometry.height());
+                // Percentage 
+                double xPercent = calcX / maxInputX;
+                double yPercent = calcY / maxInputY;
 
-            // D. Clamping
-            if (monitorPixelX < targetScreenGeometry.left()) monitorPixelX = targetScreenGeometry.left();
-            if (monitorPixelX > targetScreenGeometry.right()) monitorPixelX = targetScreenGeometry.right();
-            if (monitorPixelY < targetScreenGeometry.top()) monitorPixelY = targetScreenGeometry.top();
-            if (monitorPixelY > targetScreenGeometry.bottom()) monitorPixelY = targetScreenGeometry.bottom();
+                // Monitor Offset
+                double monitorPixelX = targetScreenGeometry.x() + (xPercent * targetScreenGeometry.width());
+                double monitorPixelY = targetScreenGeometry.y() + (yPercent * targetScreenGeometry.height());
 
-            // E. Global Scaling (0-65535)
-            double totalWidth = totalDesktopGeometry.width();
-            double totalHeight = totalDesktopGeometry.height();
-            double globalX = monitorPixelX - totalDesktopGeometry.x(); 
-            double globalY = monitorPixelY - totalDesktopGeometry.y();
+                // Clamping
+                if (monitorPixelX < targetScreenGeometry.left()) monitorPixelX = targetScreenGeometry.left();
+                if (monitorPixelX > targetScreenGeometry.right()) monitorPixelX = targetScreenGeometry.right();
+                if (monitorPixelY < targetScreenGeometry.top()) monitorPixelY = targetScreenGeometry.top();
+                if (monitorPixelY > targetScreenGeometry.bottom()) monitorPixelY = targetScreenGeometry.bottom();
 
-            finalX = (int32_t)((globalX / totalWidth) * ABS_MAX_VAL);
-            finalY = (int32_t)((globalY / totalHeight) * ABS_MAX_VAL);
+                // Global Scaling
+                double totalWidth = totalDesktopGeometry.width();
+                double totalHeight = totalDesktopGeometry.height();
+                double globalX = monitorPixelX - totalDesktopGeometry.x(); 
+                double globalY = monitorPixelY - totalDesktopGeometry.y();
 
-        } else {
+                finalX = (int32_t)((globalX / totalWidth) * ABS_MAX_VAL);
+                finalY = (int32_t)((globalY / totalHeight) * ABS_MAX_VAL);
+
+            } else {
             // [FALLBACK LOGIC]
             if(displayScreenTranslator->displayStyle == DisplayStyle::stretched){
                 finalX = displayScreenTranslator->getAbsXStretched(accessoryEventData);

@@ -392,6 +392,19 @@
      <string>Get Android App (.apk file)</string>
     </property>
    </widget>
+   <widget class="QCheckBox" name="cbSwapAxis">
+    <property name="geometry">
+     <rect>
+      <x>420</x>
+      <y>330</y>
+      <width>311</width>
+      <height>20</height>
+     </rect>
+    </property>
+    <property name="text">
+     <string>Swap X/Y Axis (Fix Rotation)</string>
+    </property>
+   </widget>
   </widget>
   <widget class="QStatusBar" name="statusbar"/>
  </widget>

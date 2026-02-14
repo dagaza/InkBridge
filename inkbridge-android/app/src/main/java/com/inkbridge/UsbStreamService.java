@@ -1,13 +1,11 @@
-package com.virtual_pen;
+package com.inkbridge;
 
 import static android.content.ContentValues.TAG;
-
 import android.hardware.usb.UsbAccessory;
 import android.hardware.usb.UsbManager;
 import android.os.ParcelFileDescriptor;
 import android.util.Log;
 import android.view.View;
-
 import java.io.FileDescriptor;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
@@ -18,41 +16,40 @@ public class UsbStreamService {
     private static FileOutputStream fileOutputStream;
     private static boolean isStreamOpen = false;
 
-
     public static void streamTouchInputToUsb(UsbManager usbManager, UsbAccessory usbAccessory, View view) {
         try {
             if(!isStreamOpen){
                 fileOutputStream = getUsbFileOutputStream(usbManager, usbAccessory);
                 fileOutputStream.flush();
+
                 TouchListener touchListener = new TouchListener(fileOutputStream);
-                view.setOnTouchListener(touchListener.handleTouch);
+
+                // IMPORTANT: We must register BOTH listeners on the view
+                view.setOnTouchListener(touchListener);
+                view.setOnGenericMotionListener(touchListener);
+
                 isStreamOpen = true;
             }
         } catch (IOException e) {
-            String message = "Unexpected IO exception while attempting to open filestream on usb accessory.";
-            Log.d(TAG, message, e);
+            Log.d(TAG, "USB Stream Error", e);
         }
     }
 
     public static void closeStream(){
         try {
-            if (fileDescriptor != null) {
-                fileDescriptor.close();
-            }
-            if(fileOutputStream != null){
-                fileOutputStream.close();
-            }
+            if (fileDescriptor != null) fileDescriptor.close();
+            if (fileOutputStream != null) fileOutputStream.close();
         } catch (IOException e) {
-            throw new RuntimeException(e);
+            Log.e(TAG, "Error closing stream", e);
+        } finally {
+            isStreamOpen = false;
         }
     }
 
     private static FileOutputStream getUsbFileOutputStream(UsbManager usbManager, UsbAccessory usbAccessory) throws IOException {
-        Log.d(TAG, "openAccessory: " + usbAccessory);
         fileDescriptor = usbManager.openAccessory(usbAccessory);
         if (fileDescriptor != null) {
-            FileDescriptor fd = fileDescriptor.getFileDescriptor();
-            return new FileOutputStream(fd);
+            return new FileOutputStream(fileDescriptor.getFileDescriptor());
         }
         throw new FileNotFoundException("File descriptor not found");
     }

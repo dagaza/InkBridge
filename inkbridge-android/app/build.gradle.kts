@@ -3,11 +3,11 @@ plugins {
 }
 
 android {
-    namespace = "com.virtual_pen"
+    namespace = "com.inkbridge"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.virtual_pen"
+        applicationId = "com.inkbridge"
         minSdk = 24
         targetSdk = 34
         versionCode = 1
