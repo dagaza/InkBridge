@@ -1,5 +1,6 @@
 [versions]
 agp = "9.0.0"
+kotlin = "1.9.22" # Added Kotlin version
 junit = "4.13.2"
 junitVersion = "1.1.5"
 espressoCore = "3.5.1"
@@ -9,6 +10,9 @@ activity = "1.8.0"
 constraintlayout = "2.1.4"
 
 [libraries]
+# Added Kotlin Standard Library
+kotlin-stdlib = { group = "org.jetbrains.kotlin", name = "kotlin-stdlib", version.ref = "kotlin" }
+
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 ext-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
 espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }
@@ -19,4 +23,5 @@ constraintlayout = { group = "androidx.constraintlayout", name = "constraintlayo
 
 [plugins]
 androidApplication = { id = "com.android.application", version.ref = "agp" }
-
+# Added Kotlin Plugin
+kotlinAndroid = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
