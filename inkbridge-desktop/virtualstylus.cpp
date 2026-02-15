@@ -1,6 +1,7 @@
 #include <QGuiApplication>
 #include <chrono>
 #include <QDebug>
+#include <linux/input.h> // Required for ABS_TILT_X constants
 #include "virtualstylus.h"
 #include "error.h"
 #include "uinput.h" 
@@ -11,16 +12,19 @@
 
 using namespace std::chrono;
 
-// --- CONSTANTS ---
-// Ensure we handle the full lifecycle of Android events
 const int ACTION_HOVER_ENTER = 9;
 const int ACTION_HOVER_EXIT = 10;
-// -----------------
 
 VirtualStylus::VirtualStylus(DisplayScreenTranslator * displayScreenTranslator,
                              PressureTranslator * pressureTranslator){
     this->displayScreenTranslator = displayScreenTranslator;
     this->pressureTranslator = pressureTranslator;
+
+    // --- FIX: Initialize Input Resolution ---
+    // Since Android now sends normalized data (0..32767), 
+    // we hardcode the input resolution to match.
+    this->inputWidth = 32767;
+    this->inputHeight = 32767;
 }
 
 void VirtualStylus::initializeStylus(){
@@ -34,10 +38,13 @@ void VirtualStylus::handleAccessoryEventData(AccessoryEventData * accessoryEvent
     Error * err = new Error();
     uint64_t epoch = duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
 
-    qDebug() << "INCOMING: Action=" << accessoryEventData->action << " X=" << accessoryEventData->x;
+    if(MainWindow::isDebugMode) {
+        qDebug() << "INCOMING: Action=" << accessoryEventData->action 
+                 << " X=" << accessoryEventData->x
+                 << " TiltX=" << accessoryEventData->tiltX
+                 << " TiltY=" << accessoryEventData->tiltY;
+    }
     
-    // 1. FILTER: Which events matter?
-    // We explicitly include HOVER events here.
     bool isPositionEvent = (accessoryEventData->action == ACTION_DOWN || 
                             accessoryEventData->action == ACTION_MOVE ||
                             accessoryEventData->action == ACTION_HOVER_MOVE ||
@@ -46,71 +53,57 @@ void VirtualStylus::handleAccessoryEventData(AccessoryEventData * accessoryEvent
 
     if (isPositionEvent) {
         
-        // --- 2. PROXIMITY LOGIC (THE FIX) ---
-        // Instead of relying on state changes, we asserting the tool is PRESENT
-        // every single time we get a coordinate update. This forces the OS to 
-        // move the cursor even if we aren't touching (Hovering).
-        
+        // Tool Logic
         if(accessoryEventData->toolType == ERASER_TOOL_TYPE){
-            // It's an Eraser
             send_uinput_event(fd, ET_KEY, EC_KEY_TOOL_PEN, 0, err);
             send_uinput_event(fd, ET_KEY, EC_KEY_TOOL_RUBBER, 1, err);
         } else {
-            // It's a Pen (Default for everything else)
-            // Even if toolType is 0 or weird, assume Pen so the cursor moves.
             send_uinput_event(fd, ET_KEY, EC_KEY_TOOL_PEN, 1, err);
             send_uinput_event(fd, ET_KEY, EC_KEY_TOOL_RUBBER, 0, err);
         }
         isPenActive = true; 
 
-        // --- 3. CALCULATE COORDINATES ---
-            int32_t finalX = 0;
-            int32_t finalY = 0;
+        // Coordinate Logic
+        int32_t finalX = 0;
+        int32_t finalY = 0;
 
-            if (!targetScreenGeometry.isEmpty() && inputWidth > 0 && inputHeight > 0) {
-                
-                double calcX, calcY;
-                double maxInputX, maxInputY;
+        if (!targetScreenGeometry.isEmpty() && inputWidth > 0 && inputHeight > 0) {
+            double calcX, calcY;
+            double maxInputX, maxInputY;
 
-                if (this->swapAxis) {
-                    // SWAPPED MODE: Tablet Y -> Monitor X
-                    calcX = accessoryEventData->y;
-                    calcY = inputWidth - accessoryEventData->x; // Flip X to match orientation
-                    maxInputX = inputHeight; // The "width" of the input is now the tablet's height
-                    maxInputY = inputWidth;
-                } else {
-                    // NORMAL MODE: Tablet X -> Monitor X
-                    calcX = accessoryEventData->x;
-                    calcY = accessoryEventData->y;
-                    maxInputX = inputWidth;
-                    maxInputY = inputHeight;
-                }
-
-                // Percentage 
-                double xPercent = calcX / maxInputX;
-                double yPercent = calcY / maxInputY;
-
-                // Monitor Offset
-                double monitorPixelX = targetScreenGeometry.x() + (xPercent * targetScreenGeometry.width());
-                double monitorPixelY = targetScreenGeometry.y() + (yPercent * targetScreenGeometry.height());
-
-                // Clamping
-                if (monitorPixelX < targetScreenGeometry.left()) monitorPixelX = targetScreenGeometry.left();
-                if (monitorPixelX > targetScreenGeometry.right()) monitorPixelX = targetScreenGeometry.right();
-                if (monitorPixelY < targetScreenGeometry.top()) monitorPixelY = targetScreenGeometry.top();
-                if (monitorPixelY > targetScreenGeometry.bottom()) monitorPixelY = targetScreenGeometry.bottom();
-
-                // Global Scaling
-                double totalWidth = totalDesktopGeometry.width();
-                double totalHeight = totalDesktopGeometry.height();
-                double globalX = monitorPixelX - totalDesktopGeometry.x(); 
-                double globalY = monitorPixelY - totalDesktopGeometry.y();
-
-                finalX = (int32_t)((globalX / totalWidth) * ABS_MAX_VAL);
-                finalY = (int32_t)((globalY / totalHeight) * ABS_MAX_VAL);
-
+            if (this->swapAxis) {
+                calcX = accessoryEventData->y;
+                calcY = inputWidth - accessoryEventData->x;
+                maxInputX = inputHeight;
+                maxInputY = inputWidth;
             } else {
-            // [FALLBACK LOGIC]
+                calcX = accessoryEventData->x;
+                calcY = accessoryEventData->y;
+                maxInputX = inputWidth;
+                maxInputY = inputHeight;
+            }
+
+            double xPercent = calcX / maxInputX;
+            double yPercent = calcY / maxInputY;
+
+            double monitorPixelX = targetScreenGeometry.x() + (xPercent * targetScreenGeometry.width());
+            double monitorPixelY = targetScreenGeometry.y() + (yPercent * targetScreenGeometry.height());
+
+            // Clamping
+            if (monitorPixelX < targetScreenGeometry.left()) monitorPixelX = targetScreenGeometry.left();
+            if (monitorPixelX > targetScreenGeometry.right()) monitorPixelX = targetScreenGeometry.right();
+            if (monitorPixelY < targetScreenGeometry.top()) monitorPixelY = targetScreenGeometry.top();
+            if (monitorPixelY > targetScreenGeometry.bottom()) monitorPixelY = targetScreenGeometry.bottom();
+
+            double totalWidth = totalDesktopGeometry.width();
+            double totalHeight = totalDesktopGeometry.height();
+            double globalX = monitorPixelX - totalDesktopGeometry.x(); 
+            double globalY = monitorPixelY - totalDesktopGeometry.y();
+
+            finalX = (int32_t)((globalX / totalWidth) * ABS_MAX_VAL);
+            finalY = (int32_t)((globalY / totalHeight) * ABS_MAX_VAL);
+        } else {
+            // Fallback
             if(displayScreenTranslator->displayStyle == DisplayStyle::stretched){
                 finalX = displayScreenTranslator->getAbsXStretched(accessoryEventData);
                 finalY = displayScreenTranslator->getAbsYStretched(accessoryEventData);
@@ -120,8 +113,7 @@ void VirtualStylus::handleAccessoryEventData(AccessoryEventData * accessoryEvent
             }
         }
 
-        // --- 4. TOUCH STATE ---
-        // Only ACTION_DOWN and ACTION_MOVE count as a "Click"
+        // Touch Logic
         bool isTouching = (accessoryEventData->action == ACTION_DOWN || 
                            accessoryEventData->action == ACTION_MOVE);
 
@@ -130,19 +122,23 @@ void VirtualStylus::handleAccessoryEventData(AccessoryEventData * accessoryEvent
             pressure = pressureTranslator->getResultingPressure(accessoryEventData);
             send_uinput_event(fd, ET_KEY, EC_KEY_TOUCH, 1, err);
         } else {
-            // HOVER: Send coords, but Touch=0 and Pressure=0
             pressure = 0;
             send_uinput_event(fd, ET_KEY, EC_KEY_TOUCH, 0, err);
         }
 
-        // --- 5. SEND EVENTS ---
+        // --- SEND EVENTS ---
         send_uinput_event(fd, ET_ABSOLUTE, EC_ABSOLUTE_X, finalX, err);
         send_uinput_event(fd, ET_ABSOLUTE, EC_ABSOLUTE_Y, finalY, err);
         send_uinput_event(fd, ET_ABSOLUTE, EC_ABSOLUTE_PRESSURE, pressure, err);
+        
+        // --- NEW: INJECT TILT ---
+        // Note: We use standard Linux constants (ABS_TILT_X) because EC_... 
+        // constants might not include tilt yet in your project.
+        send_uinput_event(fd, ET_ABSOLUTE, ABS_TILT_X, accessoryEventData->tiltX, err);
+        send_uinput_event(fd, ET_ABSOLUTE, ABS_TILT_Y, accessoryEventData->tiltY, err);
 
     } else {
-        // --- 6. OUT OF RANGE / EXIT ---
-        // If we get ACTION_HOVER_EXIT, or unknown, turn the pen OFF.
+        // Exit Logic
         send_uinput_event(fd, ET_KEY, EC_KEY_TOOL_PEN, 0, err);
         send_uinput_event(fd, ET_KEY, EC_KEY_TOOL_RUBBER, 0, err);
         send_uinput_event(fd, ET_ABSOLUTE, EC_ABSOLUTE_PRESSURE, 0, err);
@@ -154,18 +150,11 @@ void VirtualStylus::handleAccessoryEventData(AccessoryEventData * accessoryEvent
     delete err;
 }
 
-// ... (Rest of file: displayEventDebugInfo, destroyStylus, setters) ...
 void VirtualStylus::displayEventDebugInfo(AccessoryEventData * accessoryEventData){
-    if(MainWindow::isDebugMode){
-        qDebug() << "Action:" << accessoryEventData->action 
-                 << " X:" << accessoryEventData->x 
-                 << " Y:" << accessoryEventData->y;
-    }
+   // Implemented inline above
 }
 
 void VirtualStylus::destroyStylus(){
-    //ioctl(fd, UI_DEV_DESTROY);
-    // ::pclose(fd);
 }
 
 void VirtualStylus::setTargetScreen(QRect geometry) {

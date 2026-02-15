@@ -3,14 +3,14 @@
 #include "mainwindow.h"
 #include "protocol.h"
 
-// SAFETY CHECK: Stops build if struct padding is incorrect.
-static_assert(sizeof(PenPacket) == 14, "FATAL ERROR: PenPacket size is not 14 bytes. Check struct packing!");
+// SAFETY CHECK: This stops the build immediately if the struct is padded.
+// UPDATE: Expecting 22 bytes to account for Tilt X and Tilt Y
+static_assert(sizeof(PenPacket) == 22, "FATAL ERROR: PenPacket size is not 22 bytes. Check struct packing!");
 
 int main(int argc, char *argv[])
 {
     QApplication app(argc, argv);
 
-    // Modern C++: Use range-based for loop instead of Qt's 'foreach' macro
     for (const QString &arg : app.arguments()) {
         if (arg == "-d") {
             MainWindow::isDebugMode = true;
