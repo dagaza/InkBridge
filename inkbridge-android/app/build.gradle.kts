@@ -1,6 +1,7 @@
 plugins {
     alias(libs.plugins.androidApplication)
     alias(libs.plugins.kotlinAndroid)
+    alias(libs.plugins.compose.compiler)
 }
 
 android {
@@ -24,25 +25,29 @@ android {
         }
     }
 
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
+
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_1_8
-        targetCompatibility = JavaVersion.VERSION_1_8
+        // Bump to Java 11 for better Compose support
+        sourceCompatibility = JavaVersion.VERSION_11
+        targetCompatibility = JavaVersion.VERSION_11
     }
 
     kotlinOptions {
-        jvmTarget = "1.8"
+        jvmTarget = "11"
     }
 
     dependenciesInfo {
-        // Disables dependency metadata when building APKs.
         includeInApk = false
-        // Disables dependency metadata when building Android App Bundles.
         includeInBundle = false
     }
 }
 
 dependencies {
-
+    // --- Existing Dependencies ---
     implementation(libs.appcompat)
     implementation(libs.material)
     implementation(libs.activity)
@@ -52,4 +57,29 @@ dependencies {
     androidTestImplementation(libs.espresso.core)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.androidx.lifecycle.runtime.ktx)
+
+    // --- JETPACK COMPOSE (PHASE 4) ---
+    // The "Bill of Materials" (BOM) ensures all Compose libraries use compatible versions
+    val composeBom = platform("androidx.compose:compose-bom:2024.02.00")
+    implementation(composeBom)
+    androidTestImplementation(composeBom)
+
+    // Material Design 3 (The modern Android standard)
+    implementation("androidx.compose.material3:material3")
+
+    // Android Studio Preview Support
+    implementation("androidx.compose.ui:ui-tooling-preview")
+    debugImplementation("androidx.compose.ui:ui-tooling")
+
+    // UI Tests
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
+
+    // Integration with Activities (Critical for setContent)
+    implementation("androidx.activity:activity-compose:1.8.2")
+
+    // Core Graphics & Icons
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.ui:ui-graphics")
+    implementation("androidx.compose.material:material-icons-extended") // Optional: Full icon set
 }
