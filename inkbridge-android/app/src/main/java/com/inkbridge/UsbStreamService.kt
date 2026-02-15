@@ -19,8 +19,18 @@ object UsbStreamService {
     private var fileDescriptor: ParcelFileDescriptor? = null
     private var outputStream: FileOutputStream? = null
 
-    // We use a flag to prevent double-opening
+    // We keep a reference to the listener so we can re-attach it to new Views
+    private var currentListener: TouchListener? = null
     private var isStreamOpen = false
+
+    // --- NEW: Called by MainActivity to swap the drawing surface ---
+    fun updateView(view: View) {
+        if (currentListener != null) {
+            view.setOnTouchListener(currentListener)
+            view.setOnGenericMotionListener(currentListener)
+            Log.d(TAG, "TouchListener re-attached to new View.")
+        }
+    }
 
     fun streamTouchInputToUsb(
         usbManager: UsbManager,
@@ -32,15 +42,13 @@ object UsbStreamService {
             return
         }
 
-        // Use a CoroutineScope to move File I/O off the UI thread
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 Log.d(TAG, "Attempting to open accessory: ${accessory.description}")
-
                 fileDescriptor = usbManager.openAccessory(accessory)
 
                 if (fileDescriptor == null) {
-                    Log.e(TAG, "Failed to open accessory. FileDescriptor is null.")
+                    Log.e(TAG, "Failed to open accessory.")
                     return@launch
                 }
 
@@ -49,18 +57,15 @@ object UsbStreamService {
                 isStreamOpen = true
                 Log.d(TAG, "OutputStream created successfully.")
 
-                // Switch back to Main thread to touch UI elements
                 withContext(Dispatchers.Main) {
-                    Log.d(TAG, "Attaching TouchListener to View...")
-
-                    // Create the listener with the stream
+                    // Create the listener and save it
                     val touchListener = TouchListener(outputStream!!)
+                    currentListener = touchListener
 
-                    // CRITICAL: Attach to the view
+                    // Attach to the initial view
                     view.setOnTouchListener(touchListener)
                     view.setOnGenericMotionListener(touchListener)
-
-                    Log.i(TAG, "SUCCESS: TouchListener attached. Please touch the screen now.")
+                    Log.i(TAG, "SUCCESS: TouchListener attached.")
                 }
 
             } catch (e: Exception) {
@@ -80,6 +85,7 @@ object UsbStreamService {
         } finally {
             outputStream = null
             fileDescriptor = null
+            currentListener = null
             isStreamOpen = false
         }
     }

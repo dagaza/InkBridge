@@ -1,6 +1,6 @@
 [versions]
-agp = "9.0.0"
-kotlin = "2.0.0" # Added Kotlin version
+agp = "9.0.1"
+kotlin = "2.2.10" # Added Kotlin version
 junit = "4.13.2"
 junitVersion = "1.1.5"
 espressoCore = "3.5.1"

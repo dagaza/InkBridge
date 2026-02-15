@@ -1,106 +1,83 @@
 package com.inkbridge
 
-import android.util.Log // Import Logging
 import android.view.MotionEvent
 import android.view.View
-import java.io.IOException
-import java.io.OutputStream
+import android.util.Log
+import java.io.OutputStream // Change import
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import kotlin.math.cos
-import kotlin.math.sin
 
 class TouchListener(private val outputStream: OutputStream) : View.OnTouchListener, View.OnGenericMotionListener {
 
-    private val TAG = "InkBridgeTouch" // Log Tag
+    private val buffer = ByteBuffer.allocate(26).order(ByteOrder.LITTLE_ENDIAN)
+    private val TAG = "InkBridgeTouch"
 
-    private val buffer: ByteBuffer = ByteBuffer.allocate(22).apply {
-        order(ByteOrder.LITTLE_ENDIAN)
-    }
-
+    // --- 1. BLOCK INTERCEPTS (Fixes Samsung Gestures) ---
     override fun onTouch(v: View, event: MotionEvent): Boolean {
+        // Tell the parent (Samsung System UI) to NOT intercept our touches
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+            v.parent?.requestDisallowInterceptTouchEvent(true)
+        }
         return processEvent(v, event)
     }
 
     override fun onGenericMotion(v: View, event: MotionEvent): Boolean {
+        // Also block during hover to prevent "Air Actions"
+        v.parent?.requestDisallowInterceptTouchEvent(true)
         return processEvent(v, event)
     }
 
+    // --- 2. PROCESS DATA (Sends to Desktop) ---
     private fun processEvent(view: View, event: MotionEvent): Boolean {
-        // 1. Log that we received an event
-        // Log.d(TAG, "Event received: Action=${event.actionMasked}")
-
         val action = event.actionMasked
         val toolType = event.getToolType(0)
 
-        // Filter: Only allow Stylus, Eraser, or Finger
-        if (toolType != MotionEvent.TOOL_TYPE_STYLUS &&
-            toolType != MotionEvent.TOOL_TYPE_ERASER &&
-            toolType != MotionEvent.TOOL_TYPE_FINGER
-        ) {
-            return false
-        }
+        // --- DETECT BUTTON FOR ERASER ---
+        // Check if the primary stylus button is held down
+        val isButtonPressed = (event.buttonState and MotionEvent.BUTTON_STYLUS_PRIMARY) != 0
 
-        val width = view.width.toFloat()
-        val height = view.height.toFloat()
+        // Pack the button state into Bit 5 (add 32 to the action code)
+        // This tells the desktop: "The button is pressed!"
+        val actionWithButton = if (isButtonPressed) action or 32 else action
 
-        // 2. Safety Check Log
-        if (width <= 0 || height <= 0) {
-            Log.e(TAG, "ERROR: Invalid View Dimensions: ${width}x${height}")
-            return false
-        }
+        // --- COORDINATES ---
+        val x = event.x
+        val y = event.y
+        val w = view.width.toFloat()
+        val h = view.height.toFloat()
 
-        // Clamp and Normalize
-        val normX = ((event.x / width) * 32767).toInt().coerceIn(0, 32767)
-        val normY = ((event.y / height) * 32767).toInt().coerceIn(0, 32767)
+        // Normalize coordinates to 0..32767 range (Standard for USB HID)
+        val finalX = ((x / w) * 32767).toInt().coerceIn(0, 32767)
+        val finalY = ((y / h) * 32767).toInt().coerceIn(0, 32767)
 
-        // --- TILT LOGIC (Condensed for brevity, kept same as before) ---
-        var tiltX = 0
-        var tiltY = 0
-        if (toolType == MotionEvent.TOOL_TYPE_STYLUS || toolType == MotionEvent.TOOL_TYPE_ERASER) {
-            val tiltRad = event.getAxisValue(MotionEvent.AXIS_TILT)
-            val orientationRad = event.getAxisValue(MotionEvent.AXIS_ORIENTATION)
-            val tiltDeg = Math.toDegrees(tiltRad.toDouble())
-            tiltX = (tiltDeg * sin(orientationRad.toDouble())).toInt()
-            tiltY = (-tiltDeg * cos(orientationRad.toDouble())).toInt()
-        }
+        // Pressure (0..4096 is standard, Android gives 0.0..1.0)
+        val pressure = (event.pressure * 4096).toInt()
 
-        val finalX = if (SWAP_XY_AXIS) normY else normX
-        val finalY = if (SWAP_XY_AXIS) normX else normY
-        val finalTiltX = if (SWAP_XY_AXIS) tiltY else tiltX
-        val finalTiltY = if (SWAP_XY_AXIS) tiltX else tiltY
-        val pressure = (event.pressure * 1000).toInt()
+        // Tilt (Standard Android Tilt is in degrees, we send as-is for now)
+        // Note: Some styluses might need scaling here depending on your C++ backend
+        val tiltX = event.getAxisValue(MotionEvent.AXIS_TILT).toInt()
+        val tiltY = 0 // Android usually provides a combined tilt or requires complex calculation for Y
 
         synchronized(buffer) {
             buffer.clear()
+            // Protocol:
+            // [ToolType: 1] [Action: 1] [X: 4] [Y: 4] [Pressure: 4] [TiltX: 4] [TiltY: 4] ...
             buffer.put(toolType.toByte())
-            buffer.put(action.toByte())
+            buffer.put(actionWithButton.toByte()) // Send the modified action
             buffer.putInt(finalX)
             buffer.putInt(finalY)
             buffer.putInt(pressure)
-            buffer.putInt(finalTiltX)
-            buffer.putInt(finalTiltY)
+            buffer.putInt(tiltX)
+            buffer.putInt(tiltY)
 
             try {
-                // 3. Write Log
                 outputStream.write(buffer.array())
                 outputStream.flush()
-
-                // Debug Log (Only print occasionally to avoid spamming)
-                if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_UP) {
-                    Log.d(TAG, "Sent 22 bytes. X:$finalX Y:$finalY Tilt:$finalTiltX/$finalTiltY")
-                }
-
-            } catch (e: IOException) {
+            } catch (e: Exception) {
                 Log.e(TAG, "Write Failed", e)
                 return false
             }
         }
         return true
-    }
-
-    companion object {
-        @Volatile
-        var SWAP_XY_AXIS: Boolean = false
     }
 }
