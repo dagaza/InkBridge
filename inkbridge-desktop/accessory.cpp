@@ -45,7 +45,10 @@ void accessory_main(InkBridge::UsbConnection* conn, VirtualStylus* virtualStylus
     int transferred = 0;
     unsigned char acc_buf[512]; 
 
-    // Claim the interface
+    // Tracker variables to filter out redundant coordinate data
+    int lastAction = -1;
+    int lastTool = -1;
+
     ret = libusb_claim_interface(conn->getHandle(), AOA_ACCESSORY_INTERFACE);
     if (ret != 0) {
         cerr << "Error claiming interface: " << libusb_error_name(ret) << endl;
@@ -56,61 +59,47 @@ void accessory_main(InkBridge::UsbConnection* conn, VirtualStylus* virtualStylus
     AccessoryEventData eventData;
 
     while (!InkBridge::stop_acc) {
-        // Try to read up to 512 bytes
         ret = libusb_bulk_transfer(conn->getHandle(),
                                    AOA_ACCESSORY_EP_IN,
                                    acc_buf,
                                    sizeof(acc_buf),
                                    &transferred,
-                                   200); // 200ms timeout
+                                   200);
 
-        // --- CRITICAL ERROR HANDLING RESTORED ---
         if (ret < 0) {
-            // Timeouts are normal (it just means you didn't touch the screen in the last 200ms)
-            if (ret == LIBUSB_ERROR_TIMEOUT) {
-                continue; 
-            }
-            // Device disconnected
+            if (ret == LIBUSB_ERROR_TIMEOUT) continue; 
             if (ret == LIBUSB_ERROR_NO_DEVICE) {
                 cout << "Device disconnected." << endl;
                 break;
             }
-            // Other errors (e.g., Pipe, Overflow)
             cerr << "Bulk transfer error: " << libusb_error_name(ret) << endl;
             break;
         }
-        // ----------------------------------------
 
         if (transferred == 0) continue;
 
-        // DEBUG: Print exactly what we got
-        if (Backend::isDebugMode) {
-             cout << "USB IN: Received " << transferred << " bytes" << endl;
-        }
-
         int processed = 0;
-        // Check if we have a full packet (22 bytes)
         while (processed + (int)sizeof(PenPacket) <= transferred) {
             const PenPacket* packet = reinterpret_cast<const PenPacket*>(acc_buf + processed);
             
             fillEventData(eventData, packet);
 
+            // --- THE UPDATED DEBUGGER: STATE CHANGE ONLY ---
             if (Backend::isDebugMode) {
-                qDebug() << "Packet [ T:" << eventData.toolType 
-                         << " P:" << eventData.pressure 
-                         << " TX:" << eventData.tiltX 
-                         << " TY:" << eventData.tiltY 
-                         << "]";
+                // Only print if Action or ToolType changes (ignores coordinate/pressure jitter)
+                if (eventData.action != lastAction || eventData.toolType != lastTool) {
+                    qDebug() << "--- STATE CHANGE ---"
+                             << "Action:" << eventData.action 
+                             << "Tool:" << eventData.toolType;
+                    
+                    lastAction = eventData.action;
+                    lastTool = eventData.toolType;
+                }
             }
+            // -----------------------------------------------
 
             virtualStylus->handleAccessoryEventData(&eventData);
             processed += sizeof(PenPacket);
-        }
-        
-        // Warning: If we received data but it wasn't enough for a packet (e.g. 14 bytes)
-        if (processed == 0 && transferred > 0 && Backend::isDebugMode) {
-            cout << "WARNING: Partial packet received! Got " << transferred 
-                 << " bytes, needed " << sizeof(PenPacket) << endl;
         }
     }
     cout << "Capture loop finished." << endl;

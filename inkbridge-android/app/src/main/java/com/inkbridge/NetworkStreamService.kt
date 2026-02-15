@@ -8,11 +8,20 @@ import java.net.InetSocketAddress
 import java.net.Socket
 
 object NetworkStreamService {
-    private const val TAG = "InkBridge"
+    private const val TAG = "InkBridgeNetwork"
     private const val CONNECTION_TIMEOUT = 5000
 
     private var socket: Socket? = null
     private var outputStream: OutputStream? = null
+    private var currentListener: TouchListener? = null
+
+    // --- NEW: Called by MainActivity to swap the drawing surface ---
+    fun updateView(view: View) {
+        if (currentListener != null) {
+            view.setOnTouchListener(currentListener)
+            view.setOnGenericMotionListener(currentListener)
+        }
+    }
 
     fun streamTouchInputToWifi(host: String, port: Int, view: View) {
         try {
@@ -22,6 +31,7 @@ object NetworkStreamService {
             outputStream = socket?.getOutputStream()
 
             val touchListener = TouchListener(outputStream!!)
+            currentListener = touchListener
 
             view.post {
                 view.setOnTouchListener(touchListener)
@@ -41,6 +51,7 @@ object NetworkStreamService {
         } finally {
             outputStream = null
             socket = null
+            currentListener = null
         }
     }
 }
