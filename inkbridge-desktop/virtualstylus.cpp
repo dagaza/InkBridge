@@ -8,7 +8,7 @@
 #include "constants.h"
 #include "accessory.h"
 #include "pressuretranslator.h"
-#include "mainwindow.h"
+#include "backend.h"
 
 using namespace std::chrono;
 
@@ -38,7 +38,7 @@ void VirtualStylus::handleAccessoryEventData(AccessoryEventData * accessoryEvent
     Error * err = new Error();
     uint64_t epoch = duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
 
-    if(MainWindow::isDebugMode) {
+    if(Backend::isDebugMode) {
         qDebug() << "INCOMING: Action=" << accessoryEventData->action 
                  << " X=" << accessoryEventData->x
                  << " TiltX=" << accessoryEventData->tiltX

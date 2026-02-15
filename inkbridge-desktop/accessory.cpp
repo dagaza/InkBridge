@@ -2,7 +2,7 @@
 #include "linux-adk.h"
 #include "protocol.h"
 #include "virtualstylus.h"
-#include "mainwindow.h"
+#include "backend.h"
 
 #include <iostream>
 #include <vector>
@@ -13,7 +13,7 @@
 using namespace std;
 
 namespace InkBridge {
-    extern volatile std::atomic<bool> stop_acc;
+    volatile std::atomic<bool> stop_acc(false);
 }
 
 #define AOA_ACCESSORY_INTERFACE 0
@@ -84,7 +84,7 @@ void accessory_main(InkBridge::UsbConnection* conn, VirtualStylus* virtualStylus
         if (transferred == 0) continue;
 
         // DEBUG: Print exactly what we got
-        if (MainWindow::isDebugMode) {
+        if (Backend::isDebugMode) {
              cout << "USB IN: Received " << transferred << " bytes" << endl;
         }
 
@@ -95,7 +95,7 @@ void accessory_main(InkBridge::UsbConnection* conn, VirtualStylus* virtualStylus
             
             fillEventData(eventData, packet);
 
-            if (MainWindow::isDebugMode) {
+            if (Backend::isDebugMode) {
                 qDebug() << "Packet [ T:" << eventData.toolType 
                          << " P:" << eventData.pressure 
                          << " TX:" << eventData.tiltX 
@@ -108,7 +108,7 @@ void accessory_main(InkBridge::UsbConnection* conn, VirtualStylus* virtualStylus
         }
         
         // Warning: If we received data but it wasn't enough for a packet (e.g. 14 bytes)
-        if (processed == 0 && transferred > 0 && MainWindow::isDebugMode) {
+        if (processed == 0 && transferred > 0 && Backend::isDebugMode) {
             cout << "WARNING: Partial packet received! Got " << transferred 
                  << " bytes, needed " << sizeof(PenPacket) << endl;
         }

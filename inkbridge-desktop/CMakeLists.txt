@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 # Project Definition
-project(InkBridge VERSION 0.1 LANGUAGES CXX C)
+project(InkBridge VERSION 0.2 LANGUAGES CXX C)
 
 # -----------------------------------------------------------------------------
 # 1. Project Configuration & C++20 Standard
@@ -15,31 +15,35 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 # -----------------------------------------------------------------------------
-# 2. Dependencies (Qt6 + LibUSB)
+# 2. Dependencies (Qt Quick + LibUSB)
 # -----------------------------------------------------------------------------
-find_package(Qt6 COMPONENTS Widgets Concurrent QUIET)
+# We search for Quick, Qml, Core, and Widgets (Widgets kept for legacy safety)
+find_package(Qt6 COMPONENTS Quick Qml Core Gui Widgets QUIET)
 
 if(Qt6_FOUND)
     message(STATUS "Building with Qt 6 (${Qt6_VERSION})")
-    set(QT_LIBS Qt6::Widgets Qt6::Concurrent)
+    set(QT_LIBS Qt6::Quick Qt6::Qml Qt6::Core Qt6::Gui Qt6::Widgets)
 else()
     message(STATUS "Qt 6 not found, falling back to Qt 5...")
-    find_package(Qt5 COMPONENTS Widgets Concurrent REQUIRED)
-    set(QT_LIBS Qt5::Widgets Qt5::Concurrent)
+    find_package(Qt5 COMPONENTS Quick Qml Core Gui Widgets REQUIRED)
+    set(QT_LIBS Qt5::Quick Qt5::Qml Qt5::Core Qt5::Gui Qt5::Widgets)
 endif()
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBUSB REQUIRED libusb-1.0)
 
 # -----------------------------------------------------------------------------
-# 3. Source Definitions (Removed hid.cpp)
+# 3. Source Definitions
 # -----------------------------------------------------------------------------
 set(PROJECT_SOURCES
+    # Core Application
     main.cpp
-    mainwindow.cpp
-    mainwindow.h
-    mainwindow.ui
-    udevdialog.ui
+    
+    # QML Bridge & Logic (Phase 5)
+    backend.cpp
+    backend.h
+    
+    # Logic (Preserved from Phase 3/4)
     accessory.cpp
     accessory.h
     linux-adk.cpp
@@ -52,7 +56,10 @@ set(PROJECT_SOURCES
     pressuretranslator.h
     filepermissionvalidator.cpp
     filepermissionvalidator.h
+    
+    # Resources
     icon.qrc
+    Main.qml  # Included here so it shows up in IDEs
     
     # Legacy C Sources (Required for uinput injection)
     error.c
@@ -101,10 +108,17 @@ install(TARGETS InkBridge
     BUNDLE DESTINATION .
 )
 
+# Standard Linux Desktop integrations
 install(FILES resources/io.github.androidvirtualpen.virtualpen.desktop DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/applications/)
 install(FILES resources/io.github.androidvirtualpen.virtualpen.svg DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/apps/)
 install(FILES resources/io.github.androidvirtualpen.virtualpen.metainfo.xml DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/metainfo/)
 
+# Deployment helper for Qt6
 if(Qt6_FOUND)
     qt_finalize_executable(InkBridge)
 endif()
+
+add_custom_command(TARGET InkBridge POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    ${CMAKE_CURRENT_SOURCE_DIR}/Main.qml
+    $<TARGET_FILE_DIR:InkBridge>)

@@ -11,9 +11,6 @@ extern void accessory_main(InkBridge::UsbConnection* conn, VirtualStylus* virtua
 
 namespace InkBridge {
 
-// Global flag for signal handling
-volatile std::atomic<bool> stop_acc{false};
-
 void signal_handler(int) {
     std::cout << "SIGINT: Stopping accessory..." << std::endl;
     stop_acc = true;
