@@ -231,6 +231,22 @@ class MainActivity : ComponentActivity() {
     ) {
         var showWifiDialog by remember { mutableStateOf(false) }
 
+        // --- NEW: Auto-Connect Polling ---
+        // Checks for a USB accessory every 2 seconds.
+        // If found, it automatically triggers the "USB" connection flow.
+        LaunchedEffect(Unit) {
+            while (true) {
+                val accessories = usbManager.accessoryList
+                if (!accessories.isNullOrEmpty()) {
+                    // Accessory detected! Auto-click the connect button logic.
+                    onConnectRequested("USB", "", "")
+                    break // Stop polling once we trigger the request
+                }
+                kotlinx.coroutines.delay(2000) // Wait 2 seconds before next check
+            }
+        }
+        // ----------------------------------
+
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Column(
                 modifier = Modifier.fillMaxSize().padding(24.dp),
@@ -239,10 +255,17 @@ class MainActivity : ComponentActivity() {
             ) {
                 Text(text = "InkBridge", style = MaterialTheme.typography.displayLarge, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
                 Text(text = "v${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.labelLarge, color = Color.Gray)
+                
+                // Show "Scanning..." if we are waiting for the PC
+                val displayStatus = if (statusMessage == "Ready to Connect") "Waiting for PC..." else statusMessage
+                
                 Spacer(modifier = Modifier.height(48.dp))
-                StatusCard(status = statusMessage, isConnected = false)
+                StatusCard(status = displayStatus, isConnected = false)
                 Spacer(modifier = Modifier.height(48.dp))
+                
+                // We keep the button as a fallback, but the loop above handles it mostly
                 ConnectButton(text = "Connect via USB", icon = Icons.Default.Usb, onClick = { onConnectRequested("USB", "", "") })
+                
                 Spacer(modifier = Modifier.height(16.dp))
                 OutlinedButton(onClick = { showWifiDialog = true }, modifier = Modifier.widthIn(min = 250.dp).height(56.dp)) {
                     Icon(Icons.Default.Wifi, contentDescription = null)

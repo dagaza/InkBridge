@@ -40,6 +40,10 @@ public:
     int startCapture(const std::string& deviceId, VirtualStylus* stylus);
     libusb_device_handle* getHandle() const { return handle.get(); }
 
+    // --- MOVED TO PUBLIC ---
+    bool isAccessoryPresent();
+    // -----------------------
+
 private:
     struct LibUsbDeleter {
         void operator()(libusb_device_handle* h) const {
@@ -55,7 +59,6 @@ private:
     uint32_t aoaVersion = 0;
 
     int initAccessory(int maxAoaVersion);
-    bool isAccessoryPresent();
     void sendString(uint16_t index, const std::string& str);
 };
 

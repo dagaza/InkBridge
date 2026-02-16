@@ -182,6 +182,7 @@ ApplicationWindow {
                 // USB Connect Button with animation
                 Button {
                     id: usbBtn
+                    visible: false // Hide for now, should be removed in future updates when auto-connection is implemented
                     Layout.fillWidth: true
                     Layout.preferredHeight: 48
                     text: backend.isConnected ? "Disconnect (USB)" : "Connect (USB)"
@@ -321,6 +322,7 @@ ApplicationWindow {
 
                     // SECTION 1: INPUT DEVICE
                     ColumnLayout {
+                        visible: false // Hide for now, should be removed in future updates when auto-connection is implemented
                         Layout.fillWidth: true
                         spacing: 12
                         
