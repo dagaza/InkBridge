@@ -9,6 +9,7 @@ import android.util.Log
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
+import android.view.WindowManager // <--- NEW
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import androidx.activity.ComponentActivity
@@ -47,6 +48,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         usbManager = getSystemService(Context.USB_SERVICE) as UsbManager
 
@@ -182,7 +185,17 @@ class MainActivity : ComponentActivity() {
                 return@launch
             }
             val accessory = accessories[0]
+            
+            // --- FIX: Ensure clean stream start ---
+            // Move logic to IO thread and close previous connections first
             withContext(Dispatchers.IO) {
+                // 1. Force close any existing stream
+                UsbStreamService.closeStream()
+                
+                // 2. Brief pause to let OS release the file descriptor
+                kotlinx.coroutines.delay(100)
+                
+                // 3. Start the new stream
                 UsbStreamService.streamTouchInputToUsb(usbManager, accessory, view)
             }
             onResult("Connected to Device")
