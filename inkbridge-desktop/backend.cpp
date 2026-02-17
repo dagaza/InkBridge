@@ -327,49 +327,125 @@ void Backend::autoConnectLoop() {
     qDebug() << "[AutoConnect] Loop exited.";
 }
 
+void Backend::forceUsbReset() {
+    qDebug() << "[Backend] User requested Manual USB Reset.";
+    
+    // 1. Tell the background loop to stop capturing momentarily
+    InkBridge::stop_acc = true; 
+    
+    // 2. Find the device again to get a fresh handle for resetting
+    // We reuse the scanning logic essentially, but just to find the VID/PID
+    libusb_context *ctx = nullptr;
+    if (libusb_init(&ctx) < 0) return;
+
+    libusb_device **devs = nullptr;
+    ssize_t cnt = libusb_get_device_list(ctx, &devs);
+    
+    for (ssize_t i = 0; i < cnt; i++) {
+        libusb_device *dev = devs[i];
+        struct libusb_device_descriptor desc;
+        if (libusb_get_device_descriptor(dev, &desc) < 0) continue;
+
+        // Check for Google Accessory ID (The one we are currently connected to)
+        if (desc.idVendor == 0x18d1 && (desc.idProduct == 0x2d00 || desc.idProduct == 0x2d01)) {
+             
+             // Open it momentarily
+             libusb_device_handle *handle = nullptr;
+             if (libusb_open(dev, &handle) == 0) {
+                 qDebug() << "[Backend] Resetting Device: " << Qt::hex << desc.idVendor << ":" << desc.idProduct;
+                 
+                 // THE MAGIC COMMAND: Simulates a physical unplug
+                 libusb_reset_device(handle);
+                 
+                 libusb_close(handle);
+                 break; // Done
+             }
+        }
+    }
+
+    libusb_free_device_list(devs, 1);
+    libusb_exit(ctx);
+    
+    // 3. Reset the stop flag so the loop can reconnect naturally
+    // We give it a small delay so the loop in the other thread has time to fail and reset
+    QTimer::singleShot(2000, this, [this](){
+        InkBridge::stop_acc = false;
+    });
+}
+
 QString Backend::scanForInkBridgeDevice() {
     libusb_context *ctx = nullptr;
     libusb_device **devs = nullptr;
     QString foundId = "";
 
+    // 1. Initialize LibUSB
     if (libusb_init(&ctx) < 0) {
         qCritical() << "[AutoConnect] libusb_init failed!";
         return "";
     }
 
+    // 2. Get Device List
     ssize_t cnt = libusb_get_device_list(ctx, &devs);
-    if (cnt < 0) { libusb_exit(ctx); return ""; }
+    if (cnt < 0) { 
+        libusb_exit(ctx); 
+        return ""; 
+    }
 
     for (ssize_t i = 0; i < cnt; i++) {
         libusb_device *dev = devs[i];
         struct libusb_device_descriptor desc;
         if (libusb_get_device_descriptor(dev, &desc) < 0) continue;
 
-        // PATH A: Is it ALREADY an Accessory? (The Goal)
+        // ======================================================
+        // PATH A: The "Happy Path" (Already Connected)
+        // ======================================================
+        // If the device is ALREADY a Google Accessory (0x18D1), we are done.
+        // We catch PIDs: 0x2D00 (Accessory), 0x2D01 (Accessory + ADB)
         if (desc.idVendor == 0x18d1 && (desc.idProduct == 0x2d00 || desc.idProduct == 0x2d01)) {
-             char idStr[10];
-             sprintf(idStr, "%04x:%04x", desc.idVendor, desc.idProduct);
+             char idStr[16]; // Increased buffer size for safety
+             snprintf(idStr, sizeof(idStr), "%04x:%04x", desc.idVendor, desc.idProduct);
              foundId = QString(idStr);
-             break; // Found it! Return immediately.
+             
+             qDebug() << "[AutoConnect] Found active accessory:" << foundId;
+             break; // Stop scanning immediately
         }
 
-        // PATH B: Is it a generic Android device we need to wake up?
-        // We ignore known bad classes (0x09 = Hub) to save time/risk
+        // ======================================================
+        // PATH B: The "Wake Up" Path (Needs Handshake)
+        // ======================================================
+        
+        // FILTER 1: Skip Hubs (Class 0x09)
         if (desc.bDeviceClass == 0x09) continue; 
 
+        // FILTER 2: ONLY open supported brands (Samsung, Google, etc.)
+        // Do NOT open mice, keyboards, or webcams!
+        // Add your supported Vendor IDs here.
+        bool isSupportedVendor = (desc.idVendor == 0x18d1 || // Google
+                                  desc.idVendor == 0x04e8 || // Samsung
+                                  desc.idVendor == 0x2717 || // Xiaomi
+                                  desc.idVendor == 0x22b8 || // Motorola
+                                  desc.idVendor == 0x12d1);  // Huawei
+        
+        if (!isSupportedVendor) continue;
+
+        // Now it is safe to open and check
         libusb_device_handle *handle = nullptr;
         int err = libusb_open(dev, &handle);
         if (err == 0) {
-            // Attempt the handshake
-            // If this returns true, the device will disconnect and reappear as Path A in a few seconds.
-            // We don't return an ID here, we just wait for the next loop cycle.
+            // Attempt to switch (Handshake)
+            // If successful, the device will disconnect and reappear as Path A in ~2 seconds.
             bool switched = trySwitchToAccessoryMode(dev, handle);
             
             libusb_close(handle);
             
             if (switched) {
-                // Optional: Short sleep to let USB bus settle
-                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                qDebug() << "[AutoConnect] Handshake sent. Waiting for re-enumeration...";
+                // We don't return an ID here. We return "" and let the loop run again.
+                // The next scan (in 1-2 seconds) will catch it in Path A.
+                std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+                
+                // Optional: Break here to save CPU, since the device is rebooting anyway
+                break; 
             }
         }
     }

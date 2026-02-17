@@ -1,7 +1,7 @@
 #include <QGuiApplication>
 #include <chrono>
 #include <QDebug>
-#include <linux/input.h> // Required for ABS_TILT_X constants
+#include <linux/input.h> 
 #include "virtualstylus.h"
 #include "error.h"
 #include "uinput.h" 
@@ -12,11 +12,9 @@
 
 using namespace std::chrono;
 
-// ACTION_CANCEL is already in uinput.h, so we don't redefine it here.
 const int ACTION_HOVER_ENTER = 9;
 const int ACTION_HOVER_EXIT = 10;
 
-// --- FIX 1: Updated Constructor to match header (added parent) ---
 VirtualStylus::VirtualStylus(DisplayScreenTranslator * displayScreenTranslator,
                              PressureTranslator * pressureTranslator,
                              QObject *parent) : QObject(parent)
@@ -25,24 +23,56 @@ VirtualStylus::VirtualStylus(DisplayScreenTranslator * displayScreenTranslator,
     this->pressureTranslator = pressureTranslator;
     this->inputWidth = 32767;
     this->inputHeight = 32767;
+    this->isPenActive = false;
 
-    // --- SETUP WATCHDOG TIMER ---
-    watchdogTimer = new QTimer(this);
-    watchdogTimer->setSingleShot(true); // Fire once per event gap
-    // Connect the timer signal to our reset slot
-    connect(watchdogTimer, &QTimer::timeout, this, &VirtualStylus::onWatchdogTimeout);
+    // --- SETUP WATCHDOG (STD::THREAD) ---
+    // We initialize the timestamp to now so it doesn't fire immediately
+    m_lastEventTime = steady_clock::now().time_since_epoch().count();
+    m_watchdogRunning = true;
+    
+    // Launch the dedicated safety thread
+    m_watchdogThread = std::thread(&VirtualStylus::watchdogLoop, this);
+}
+
+VirtualStylus::~VirtualStylus() {
+    // Stop the thread safely
+    m_watchdogRunning = false;
+    if (m_watchdogThread.joinable()) {
+        m_watchdogThread.join();
+    }
 }
 
 void VirtualStylus::initializeStylus(){
+    std::lock_guard<std::mutex> lock(m_mutex); // Safety lock
     Error * err = new Error();
     const char* deviceName = "pen-emu";
     fd = init_uinput_stylus(deviceName, err);
     delete err;
 }
 
-// --- FIX 2: Added the Watchdog Reset Function ---
-void VirtualStylus::onWatchdogTimeout() {
-    if (!isPenActive) return; // Already reset, do nothing
+// --- NEW: Thread-Safe Watchdog Loop ---
+void VirtualStylus::watchdogLoop() {
+    while (m_watchdogRunning) {
+        // Sleep for 50ms to save CPU
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+        // Calculate time since last packet
+        int64_t last = m_lastEventTime.load();
+        int64_t now = steady_clock::now().time_since_epoch().count();
+        int64_t diff_ms = duration_cast<milliseconds>(nanoseconds(now - last)).count();
+
+        // If > 150ms has passed and pen is active, force reset
+        // We use a lock inside performWatchdogReset to be safe
+        if (diff_ms > 150) {
+            performWatchdogReset();
+        }
+    }
+}
+
+void VirtualStylus::performWatchdogReset() {
+    std::lock_guard<std::mutex> lock(m_mutex); // LOCK MUTEX
+
+    if (!isPenActive) return; // Already reset
 
     if(Backend::isDebugMode) qDebug() << "WATCHDOG: Stream silent, forcing stylus lift.";
 
@@ -51,7 +81,7 @@ void VirtualStylus::onWatchdogTimeout() {
     // FORCE RELEASE EVERYTHING
     send_uinput_event(fd, ET_KEY, EC_KEY_TOOL_PEN, 0, err);
     send_uinput_event(fd, ET_KEY, EC_KEY_TOOL_RUBBER, 0, err);
-    send_uinput_event(fd, ET_KEY, EC_KEY_TOUCH, 0, err); // This unlocks the mouse!
+    send_uinput_event(fd, ET_KEY, EC_KEY_TOUCH, 0, err);
     send_uinput_event(fd, ET_ABSOLUTE, EC_ABSOLUTE_PRESSURE, 0, err);
     
     send_uinput_event(fd, ET_SYNC, EC_SYNC_REPORT, 0, err);
@@ -61,11 +91,12 @@ void VirtualStylus::onWatchdogTimeout() {
 }
 
 void VirtualStylus::handleAccessoryEventData(AccessoryEventData * accessoryEventData){
-    // --- RESET WATCHDOG ---
-    // Every time we receive a packet, we push the "bomb" back by 150ms.
-    // If the stream stops (Samsung gesture, network lag), the timer expires and resets the mouse.
-    if (watchdogTimer->isActive()) watchdogTimer->stop();
-    watchdogTimer->start(150);
+    // 1. Kick the Dog (Update timestamp)
+    m_lastEventTime = steady_clock::now().time_since_epoch().count();
+
+    // 2. Lock critical section
+    // This ensures we don't write to UInput while the Watchdog is trying to reset it
+    std::lock_guard<std::mutex> lock(m_mutex); 
 
     Error * err = new Error();
     uint64_t epoch = duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
@@ -178,8 +209,7 @@ void VirtualStylus::handleAccessoryEventData(AccessoryEventData * accessoryEvent
         
         isPenActive = false;
         
-        // If we exit cleanly, we can stop the watchdog
-        watchdogTimer->stop();
+        // Timer stop logic removed (replaced by automatic thread checks)
     }
 
     send_uinput_event(fd, ET_MSC, EC_MSC_TIMESTAMP, epoch, err);
@@ -188,14 +218,13 @@ void VirtualStylus::handleAccessoryEventData(AccessoryEventData * accessoryEvent
 }
 
 void VirtualStylus::displayEventDebugInfo(AccessoryEventData * accessoryEventData){
-   Q_UNUSED(accessoryEventData); // Silence compiler warning
+   Q_UNUSED(accessoryEventData);
 }
 
 void VirtualStylus::destroyStylus(){
+    std::lock_guard<std::mutex> lock(m_mutex); // Lock before closing
     if(fd >= 0) {
-        // Cleanup uinput device if needed
-        // ioctl(fd, UI_DEV_DESTROY);
-        // close(fd);
+        // cleanup logic
     }
 }
 

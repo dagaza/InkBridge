@@ -1,24 +1,30 @@
 #ifndef VIRTUALSTYLUS_H
 #define VIRTUALSTYLUS_H
 
-#include <QObject> // <--- REQUIRED for QTimer and Q_OBJECT
-#include <QTimer>  // <--- REQUIRED for the Watchdog
+#include <QObject>
 #include <QScreen>
-#include <QRect> 
+#include <QRect>
+#include <mutex>
+#include <thread>
+#include <atomic>
 #include "accessory.h"
 #include "displayscreentranslator.h"
 #include "pressuretranslator.h"
 
-// We must inherit from QObject to use Signals/Slots (Timers)
+// We inherit from QObject for parent-child memory management, 
+// but we now use std::thread for the watchdog to avoid QTimer threading issues.
 class VirtualStylus : public QObject
 {
-    Q_OBJECT // <--- Enable Qt meta-object features
+    Q_OBJECT 
 
 public:
     // Constructor
     explicit VirtualStylus(DisplayScreenTranslator * accessoryScreen, 
                            PressureTranslator *pressureTranslator, 
                            QObject *parent = nullptr);
+    
+    // Destructor (Required to stop the thread safely)
+    ~VirtualStylus();
 
     void handleAccessoryEventData(AccessoryEventData * accessoryEventData);
     void initializeStylus();
@@ -31,16 +37,20 @@ public:
 
     bool swapAxis = false;
 
-private slots:
-    // --- SAFETY SLOT ---
-    void onWatchdogTimeout(); // Called when the stream goes silent
-
 private:
     int fd;
-    bool isPenActive = false;
     
-    // --- TIMER ---
-    QTimer *watchdogTimer; 
+    // --- THREADING & WATCHDOG ---
+    // We use a mutex to ensure the 'Watchdog Thread' and 'USB Thread' 
+    // don't try to write to the file descriptor (fd) at the exact same time.
+    std::mutex m_mutex; 
+    std::thread m_watchdogThread;
+    std::atomic<bool> m_watchdogRunning;
+    std::atomic<int64_t> m_lastEventTime; // Stores time in milliseconds
+    bool isPenActive = false; // Protected by m_mutex
+
+    void watchdogLoop();      // The background loop checking for timeouts
+    void performWatchdogReset(); // The logic to lift the pen
 
     DisplayScreenTranslator * displayScreenTranslator;
     PressureTranslator * pressureTranslator;

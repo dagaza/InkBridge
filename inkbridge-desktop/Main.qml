@@ -115,7 +115,7 @@ ApplicationWindow {
                 // 2. ENHANCED STATUS CARD
                 Rectangle {
                     Layout.fillWidth: true
-                    height: 72
+                    implicitHeight: backend.isConnected ? 90 : 72 // Taller when button is visible
                     radius: 12
                     color: backend.isConnected ? Qt.rgba(0, 200/255, 83/255, 0.12) : Qt.rgba(160/255, 160/255, 160/255, 0.08)
                     border.color: backend.isConnected ? Qt.rgba(0, 200/255, 83/255, 0.4) : Qt.rgba(160/255, 160/255, 160/255, 0.2)
@@ -123,6 +123,7 @@ ApplicationWindow {
                     
                     Behavior on color { ColorAnimation { duration: longAnimDuration } }
                     Behavior on border.color { ColorAnimation { duration: longAnimDuration } }
+                    Behavior on implicitHeight { NumberAnimation { duration: animDuration } }
 
                     RowLayout {
                         anchors.fill: parent
@@ -133,6 +134,8 @@ ApplicationWindow {
                         Item {
                             width: 14
                             height: 14
+                            Layout.alignment: Qt.AlignTop | Qt.AlignLeft
+                            Layout.topMargin: 4 
                             
                             Rectangle {
                                 anchors.centerIn: parent
@@ -173,6 +176,35 @@ ApplicationWindow {
                                 color: backend.isConnected ? successCol : textCol
                                 Behavior on color { ColorAnimation { duration: longAnimDuration } }
                             }
+
+                            // --- NEW: Reset Button (Visible only when connected) ---
+                            Button {
+                                visible: backend.isConnected
+                                text: "Reset Connection"
+                                flat: true
+                                Layout.preferredHeight: 20
+                                Layout.topMargin: 2
+                                
+                                contentItem: Text {
+                                    text: parent.text
+                                    font.pixelSize: 11
+                                    font.underline: true
+                                    // Use the window properties for colors
+                                    color: parent.down ? accentCol : subTextCol
+                                    horizontalAlignment: Text.AlignLeft
+                                    verticalAlignment: Text.AlignTop
+                                    
+                                    Behavior on color { ColorAnimation { duration: 100 } }
+                                }
+                                
+                                background: Item {} // Transparent background
+                                
+                                onClicked: {
+                                    console.log("Resetting USB...");
+                                    backend.forceUsbReset();
+                                }
+                            }
+                            // -------------------------------------------------------
                         }
                     }
                 }

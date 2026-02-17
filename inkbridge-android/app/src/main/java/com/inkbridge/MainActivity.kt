@@ -2,6 +2,10 @@ package com.inkbridge
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.BroadcastReceiver
+import android.content.Intent
+import android.content.IntentFilter
+import android.hardware.usb.UsbAccessory
 import android.hardware.usb.UsbManager
 import android.os.Build
 import android.os.Bundle
@@ -185,20 +189,54 @@ class MainActivity : ComponentActivity() {
                 return@launch
             }
             val accessory = accessories[0]
-            
-            // --- FIX: Ensure clean stream start ---
-            // Move logic to IO thread and close previous connections first
+
+            // 1. Clean up old streams
             withContext(Dispatchers.IO) {
-                // 1. Force close any existing stream
                 UsbStreamService.closeStream()
-                
-                // 2. Brief pause to let OS release the file descriptor
                 kotlinx.coroutines.delay(100)
-                
-                // 3. Start the new stream
+            }
+
+            // 2. REGISTER THE "SUICIDE" RECEIVER
+            val detachReceiver = object : BroadcastReceiver() {
+                override fun onReceive(context: Context, intent: Intent) {
+                    if (UsbManager.ACTION_USB_ACCESSORY_DETACHED == intent.action) {
+                        
+                        // FIX: Explicitly cast the result to UsbAccessory? to fix the type error
+                        val detachedAccessory: UsbAccessory? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            intent.getParcelableExtra(UsbManager.EXTRA_ACCESSORY, UsbAccessory::class.java)
+                        } else {
+                            @Suppress("DEPRECATION")
+                            intent.getParcelableExtra(UsbManager.EXTRA_ACCESSORY) as? UsbAccessory
+                        }
+
+                        // Check if the detached accessory matches the one we are using
+                        // Note: We use simplistic comparison here. 
+                        // If detachedAccessory is not null, it's safer to just kill the app to be sure.
+                        if (detachedAccessory != null) {
+                             // KILL THE APP INSTANTLY
+                             try {
+                                 context.unregisterReceiver(this)
+                             } catch (e: Exception) {
+                                 // Receiver might already be unregistered, ignore
+                             }
+                             onResult("Disconnected")
+                             finishAffinity()
+                             System.exit(0)
+                        }
+                    }
+                }
+            }
+
+            // Register the receiver
+            val filter = IntentFilter(UsbManager.ACTION_USB_ACCESSORY_DETACHED)
+            registerReceiver(detachReceiver, filter)
+
+            onResult("Connected to Device")
+
+            // 3. Start Stream
+            withContext(Dispatchers.IO) {
                 UsbStreamService.streamTouchInputToUsb(usbManager, accessory, view)
             }
-            onResult("Connected to Device")
         }
     }
 
@@ -255,7 +293,7 @@ class MainActivity : ComponentActivity() {
                     onConnectRequested("USB", "", "")
                     break // Stop polling once we trigger the request
                 }
-                kotlinx.coroutines.delay(2000) // Wait 2 seconds before next check
+                kotlinx.coroutines.delay(1000) // Wait 1 second before next check
             }
         }
         // ----------------------------------

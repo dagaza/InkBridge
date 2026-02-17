@@ -51,6 +51,9 @@ public:
     // --- NEW: Auto-Connect Public Methods ---
     Q_INVOKABLE void startAutoConnect();
     Q_INVOKABLE void stopAutoConnect();
+    // NEW: The "Software Eject" button
+    Q_INVOKABLE void forceUsbReset();
+
 
 public slots:
     void refreshScreens();
