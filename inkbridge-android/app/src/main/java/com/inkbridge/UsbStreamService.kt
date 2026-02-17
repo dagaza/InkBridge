@@ -5,174 +5,132 @@ import android.hardware.usb.UsbManager
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import android.view.View
-import kotlinx.coroutines.*
 import java.io.FileDescriptor
 import java.io.FileOutputStream
 import java.io.IOException
 import java.io.OutputStream
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
 
 object UsbStreamService {
 
     private const val TAG = "InkBridgeUsbService"
     private var fileDescriptor: ParcelFileDescriptor? = null
+    private var workerThread: Thread? = null
+    private var queue = LinkedBlockingQueue<ByteArray>()
     
-    // Use our thread-safe wrapper
-    private var outputStream: SafeOutputStream? = null
-
+    @Volatile private var isStreamOpen = false
     private var currentListener: TouchListener? = null
-    private var isStreamOpen = false
-    
-    // TRACKING FOR HEARTBEAT
-    @Volatile private var lastActivityTime: Long = 0L
-    private const val HEARTBEAT_PACKET_SIZE = 22 // As you specified
+
+    // Heartbeat
+    private const val HEARTBEAT_PACKET_SIZE = 22 
 
     fun updateView(view: View) {
         if (currentListener != null) {
             view.setOnTouchListener(currentListener)
             view.setOnGenericMotionListener(currentListener)
-            Log.d(TAG, "TouchListener re-attached to new View.")
+            view.requestFocus()
         }
     }
 
-    fun streamTouchInputToUsb(
-        usbManager: UsbManager,
-        accessory: UsbAccessory,
-        view: View
-    ) {
-        if (isStreamOpen) return
+    /**
+     * BLOCKING call to open the stream. 
+     * Call this from a background thread (Dispatchers.IO).
+     */
+    fun connect(usbManager: UsbManager, accessory: UsbAccessory): Boolean {
+        if (isStreamOpen) {
+            closeStream() // Force clean reset
+        }
 
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                Log.d(TAG, "Opening accessory: ${accessory.description}")
-                fileDescriptor = usbManager.openAccessory(accessory)
+        return try {
+            Log.d(TAG, "Attempting to open accessory: ${accessory.description}")
+            fileDescriptor = usbManager.openAccessory(accessory)
 
-                if (fileDescriptor == null) {
-                    Log.e(TAG, "Failed to open accessory.")
-                    return@launch
-                }
-
-                val fd: FileDescriptor = fileDescriptor!!.fileDescriptor
-                val rawStream = FileOutputStream(fd)
-                
-                // Wrap in our synchronized, suicide-capable stream
-                outputStream = SafeOutputStream(rawStream)
-                isStreamOpen = true
-                lastActivityTime = System.currentTimeMillis()
-
-                withContext(Dispatchers.Main) {
-                    val touchListener = TouchListener(outputStream!!)
-                    currentListener = touchListener
-                    view.setOnTouchListener(touchListener)
-                    view.setOnGenericMotionListener(touchListener)
-                }
-
-                // --- START THE HEARTBEAT LOOP ---
-                launchHeartbeat(this)
-
-            } catch (e: Exception) {
-                Log.e(TAG, "Error setting up stream", e)
-                closeStream()
+            if (fileDescriptor == null) {
+                Log.e(TAG, "openAccessory returned NULL")
+                return false
             }
-        }
-    }
 
-    private fun launchHeartbeat(scope: CoroutineScope) {
-        scope.launch(Dispatchers.IO) {
+            val fd: FileDescriptor = fileDescriptor!!.fileDescriptor
+            val rawOutputStream = FileOutputStream(fd)
             
-            // FILL ENTIRE PACKET WITH 127
-            // This guarantees C++ sees "Unknown Action" and ignores X/Y coordinates
-            val heartbeatPacket = ByteArray(HEARTBEAT_PACKET_SIZE) 
-            heartbeatPacket.fill(127.toByte()) 
+            // Start the Writer Thread
+            isStreamOpen = true
+            queue.clear()
+            
+            workerThread = Thread {
+                writeLoop(rawOutputStream)
+            }.apply { 
+                name = "InkBridge-UsbWriter"
+                start() 
+            }
 
-            while (isStreamOpen) {
-                delay(500) 
-                val timeSinceLastTouch = System.currentTimeMillis() - lastActivityTime
-                
-                if (timeSinceLastTouch > 1000) {
-                    try {
-                        outputStream?.writeHeartbeat(heartbeatPacket)
-                    } catch (e: Exception) {
-                        break // Suicide logic triggers here if pipe is broken
+            // Create wrapper that pushes to Queue
+            val queueWrapper = object : OutputStream() {
+                override fun write(b: Int) { /* Unused */ }
+                override fun write(b: ByteArray) {
+                    // Non-blocking offer. Drop if full to prevent lag.
+                    if (!queue.offer(b)) {
+                        // Queue full, packet dropped (Backpressure)
                     }
                 }
             }
+
+            // Initialize Listener
+            currentListener = TouchListener(queueWrapper)
+            
+            Log.d(TAG, "USB Stream Opened Successfully")
+            true
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in connect()", e)
+            closeStream()
+            false
         }
+    }
+
+    private fun writeLoop(stream: FileOutputStream) {
+        val heartbeat = ByteArray(HEARTBEAT_PACKET_SIZE) { 127.toByte() }
+        
+        while (isStreamOpen) {
+            try {
+                // Poll: Wait up to 500ms for a touch packet
+                val packet = queue.poll(500, TimeUnit.MILLISECONDS)
+                
+                if (packet != null) {
+                    stream.write(packet)
+                } else {
+                    // Timeout = Send Heartbeat
+                    stream.write(heartbeat)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Write Loop Error: ${e.message}")
+                // If the stream dies, we close everything
+                isStreamOpen = false
+                break
+            }
+        }
+        
+        // Cleanup when loop exits
+        try { stream.close() } catch (e: Exception) {}
     }
 
     fun closeStream() {
+        Log.d(TAG, "Closing Stream...")
+        isStreamOpen = false
         try {
-            outputStream?.close()
-            fileDescriptor?.close()
-        } catch (e: Exception) {
-            Log.e(TAG, "Error closing stream", e)
-        } finally {
-            outputStream = null
-            fileDescriptor = null
-            currentListener = null
-            isStreamOpen = false
-        }
-    }
-
-    // =========================================================================
-    // THREAD-SAFE WRAPPER (Handles Synchronization & Suicide)
-    // =========================================================================
-    private class SafeOutputStream(private val wrapped: FileOutputStream) : OutputStream() {
+            workerThread?.interrupt() // Wake up thread if sleeping
+            workerThread?.join(1000)  // Wait for it to die
+        } catch (e: Exception) {}
         
-        // Lock object to prevent Heartbeat and Touch from writing bytes at the exact same time
-        private val lock = Any()
-
-        override fun write(b: Int) {
-            synchronized(lock) {
-                try {
-                    wrapped.write(b)
-                    UsbStreamService.lastActivityTime = System.currentTimeMillis()
-                } catch (e: IOException) {
-                    handleBrokenPipe(e)
-                }
-            }
-        }
-
-        override fun write(b: ByteArray) {
-            synchronized(lock) {
-                try {
-                    wrapped.write(b)
-                    UsbStreamService.lastActivityTime = System.currentTimeMillis()
-                } catch (e: IOException) {
-                    handleBrokenPipe(e)
-                }
-            }
-        }
-
-        override fun write(b: ByteArray, off: Int, len: Int) {
-            synchronized(lock) {
-                try {
-                    wrapped.write(b, off, len)
-                    UsbStreamService.lastActivityTime = System.currentTimeMillis()
-                } catch (e: IOException) {
-                    handleBrokenPipe(e)
-                }
-            }
-        }
-
-        // Special method for heartbeat that DOES NOT update 'lastActivityTime'
-        // (We don't want the heartbeat to keep the heartbeat alive)
-        fun writeHeartbeat(b: ByteArray) {
-            synchronized(lock) {
-                try {
-                    wrapped.write(b)
-                    // Do NOT update lastActivityTime here
-                } catch (e: IOException) {
-                    handleBrokenPipe(e)
-                }
-            }
-        }
-
-        override fun close() = synchronized(lock) { wrapped.close() }
-        override fun flush() = synchronized(lock) { wrapped.flush() }
-
-        private fun handleBrokenPipe(e: IOException) {
-            Log.e("InkBridge", "BROKEN PIPE: Desktop disconnected. Killing App.", e)
-            System.exit(0) 
-        }
+        workerThread = null
+        currentListener = null
+        
+        try {
+            fileDescriptor?.close()
+        } catch (e: Exception) {}
+        fileDescriptor = null
+        queue.clear()
+        Log.d(TAG, "Stream Closed.")
     }
 }
