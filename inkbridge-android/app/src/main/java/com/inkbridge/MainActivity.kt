@@ -53,11 +53,13 @@ class MainActivity : ComponentActivity() {
     // UI State
     private var isConnected by mutableStateOf(false)
     private var statusMessage by mutableStateOf("Ready to Connect")
+
+    private var pendingAccessory: UsbAccessory? = null
+    private var showTroubleshootingHint by mutableStateOf(false)
     
     // Internal State
     private var wakeLock: PowerManager.WakeLock? = null
 
-    // Permission Receiver
     private val usbReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             if (ACTION_USB_PERMISSION == intent.action) {
@@ -69,18 +71,18 @@ class MainActivity : ComponentActivity() {
                         intent.getParcelableExtra(UsbManager.EXTRA_ACCESSORY) as? UsbAccessory
                     }
 
-                    if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)) {
-                        if (accessory != null) {
-                            lifecycleScope.launch {
-                                statusMessage = "Permission Granted."
-                                kotlinx.coroutines.delay(200)
-                                // Use the EXACT accessory object from the intent
-                                val rootView = window.decorView.findViewById<View>(android.R.id.content)
-                                runConnection(accessory, rootView)
-                            }
+                    val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
+
+                    if (granted && accessory != null) {
+                        showTroubleshootingHint = false
+                        val rootView = window.decorView.findViewById<View>(android.R.id.content)
+                        // Corrected: Launch coroutine to call the suspend function
+                        lifecycleScope.launch {
+                            runConnection(accessory, rootView)
                         }
-                    } else {
+                    } else { // This else now correctly follows the 'if'
                         statusMessage = "Permission Denied"
+                        showTroubleshootingHint = true
                     }
                 }
             } else if (UsbManager.ACTION_USB_ACCESSORY_DETACHED == intent.action) {
@@ -90,6 +92,66 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) {
+            // Re-apply immersive mode whenever the window regains focus
+            // (e.g., after the user dismisses a permission dialog)
+            hideSystemUI()
+        }
+    }
+
+    // 3. NEW HELPER FUNCTION
+    private fun triggerPendingConnection() {
+        val accessory = pendingAccessory ?: return
+        val rootView = window.decorView.findViewById<View>(android.R.id.content)
+        
+        // Clear it so we don't loop
+        pendingAccessory = null 
+        
+        // Use the Retry Logic we built earlier
+        connectWithRetry(accessory, rootView)
+    }
+
+    private fun connectWithRetry(accessory: UsbAccessory, view: View) {
+        lifecycleScope.launch {
+            statusMessage = "Verifying..."
+            var connected = false
+            
+            // Try for 3 seconds (6 attempts)
+            withContext(Dispatchers.IO) {
+                for (i in 0..5) {
+                    // Try to connect even if the OS says "No Permission" (It might be lying/lagging)
+                    connected = UsbStreamService.connect(usbManager, accessory)
+                    if (connected) break
+                    
+                    // Wait 500ms before next try
+                    kotlinx.coroutines.delay(500)
+                }
+            }
+
+            if (connected) {
+                isConnected = true
+                statusMessage = "Connected via USB"
+            } else {
+                statusMessage = "Permission Denied"
+            }
+        }
+    }
+
+    private fun exitApp() {
+    // 1. Clean up hardware and network
+    disconnectAll()
+    
+    // 2. Release wake lock if held
+    if (wakeLock?.isHeld == true) {
+        wakeLock?.release()
+    }
+    
+    // 3. Close all activities and kill the process
+    finishAffinity() 
+}
 
     @SuppressLint("UnspecifiedRegisterReceiverFlag")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -107,7 +169,7 @@ class MainActivity : ComponentActivity() {
         filter.addAction(UsbManager.ACTION_USB_ACCESSORY_DETACHED)
         
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(usbReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            registerReceiver(usbReceiver, filter, Context.RECEIVER_EXPORTED)
         } else {
             registerReceiver(usbReceiver, filter)
         }
@@ -133,6 +195,8 @@ class MainActivity : ComponentActivity() {
                 if (isConnected) {
                     DrawingPad(onDisconnect = { disconnectAll() })
                 } else {
+                    // If user presses back on the home screen, exit cleanly
+                    BackHandler { exitApp() }
                     val rootView = LocalView.current
                     InkBridgeDashboard(
                         status = statusMessage,
@@ -186,18 +250,18 @@ class MainActivity : ComponentActivity() {
 
     private fun disconnectAll() {
         lifecycleScope.launch(Dispatchers.IO) {
+            // 1. Heavy lifting: Close hardware and network handles (IO Thread)
             UsbStreamService.closeStream()
             NetworkStreamService.closeStream()
-        }
-        isConnected = false
-        statusMessage = "Disconnected"
-    }
 
-    override fun onDestroy() {
-        super.onDestroy()
-        try { unregisterReceiver(usbReceiver) } catch(e:Exception){}
-        disconnectAll()
-        if (wakeLock?.isHeld == true) wakeLock?.release()
+            // 2. UI Updates: Switch back to the Main thread to update the screen
+            withContext(Dispatchers.Main) {
+                isConnected = false
+                statusMessage = "Ready to Connect"
+                // Also hide the hint if it was visible
+                showTroubleshootingHint = false
+            }
+        }
     }
 
     // ==========================================
@@ -205,23 +269,28 @@ class MainActivity : ComponentActivity() {
     // ==========================================
 
     private fun findAndConnectUsb(view: View) {
+        // Reset hint state whenever a manual attempt starts
+        showTroubleshootingHint = false 
+        
         lifecycleScope.launch {
             val accessories = usbManager.accessoryList
             if (accessories.isNullOrEmpty()) {
                 statusMessage = "No USB Device Found."
+                withContext(Dispatchers.IO) {
+                UsbStreamService.closeStream()
+                }
                 return@launch
             }
             val accessory = accessories[0]
 
             if (!usbManager.hasPermission(accessory)) {
                 statusMessage = "Requesting Permission..."
+                val intent = Intent(ACTION_USB_PERMISSION).apply { setPackage(packageName) }
                 val permissionIntent = PendingIntent.getBroadcast(
-                    this@MainActivity, 0, Intent(ACTION_USB_PERMISSION),
-                    PendingIntent.FLAG_IMMUTABLE
+                    this@MainActivity, 0, intent, PendingIntent.FLAG_IMMUTABLE
                 )
                 usbManager.requestPermission(accessory, permissionIntent)
             } else {
-                // Already have permission
                 runConnection(accessory, view)
             }
         }
@@ -332,35 +401,97 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    fun InkBridgeDashboard(status: String, onConnectRequested: (String, String, String) -> Unit) {
-        var showWifiDialog by remember { mutableStateOf(false) }
+fun InkBridgeDashboard(
+    status: String,
+    onConnectRequested: (method: String, ip: String, port: String) -> Unit
+) {
+    var showWifiDialog by remember { mutableStateOf(false) }
 
-        Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-            Column(
-                modifier = Modifier.fillMaxSize().padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
-            ) {
-                Text("InkBridge", style = MaterialTheme.typography.displayLarge, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
-                Spacer(modifier = Modifier.height(48.dp))
-                StatusCard(status = status)
-                Spacer(modifier = Modifier.height(48.dp))
-                ConnectButton("Connect via USB", Icons.Default.Usb) { onConnectRequested("USB", "", "") }
+    Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+        Column(
+            modifier = Modifier.fillMaxSize().padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text(
+                text = "InkBridge", 
+                style = MaterialTheme.typography.displayLarge, 
+                color = MaterialTheme.colorScheme.primary, 
+                fontWeight = FontWeight.Bold
+            )
+            
+            Spacer(modifier = Modifier.height(48.dp))
+            StatusCard(status = status)
+
+            // --- TROUBLESHOOTING HINT ---
+            if (showTroubleshootingHint) {
                 Spacer(modifier = Modifier.height(16.dp))
-                ConnectButton("Auto-Discover WiFi", Icons.Default.Wifi) { onConnectRequested("WIFI_DISCOVER", "", "") }
-                Spacer(modifier = Modifier.height(16.dp))
-                TextButton(onClick = { showWifiDialog = true }) {
-                    Text("Manual IP Input", color = androidx.compose.ui.graphics.Color.Gray)
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = androidx.compose.ui.graphics.Color(0xFF332200)
+                    ),
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                ) {
+                    Text(
+                        text = "First time connecting? If you just checked 'Always allow', please press Connect again.",
+                        color = androidx.compose.ui.graphics.Color(0xFFFFCC00),
+                        modifier = Modifier.padding(12.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
                 }
             }
-        }
-        if (showWifiDialog) {
-            WifiConnectDialog(onDismiss = { showWifiDialog = false }, onConnect = { ip, port -> 
+
+            Spacer(modifier = Modifier.height(48.dp))
+            
+            ConnectButton("Connect via USB", Icons.Default.Usb) { 
+                onConnectRequested("USB", "", "") 
+            }
+            
+            Spacer(modifier = Modifier.height(16.dp))
+            
+            ConnectButton("Auto-Discover WiFi", Icons.Default.Wifi) { 
+                onConnectRequested("WIFI_DISCOVER", "", "") 
+            }
+            
+            Spacer(modifier = Modifier.height(16.dp))
+            
+            TextButton(onClick = { showWifiDialog = true }) {
+                Text(
+                    text = "Manual IP Input", 
+                    color = androidx.compose.ui.graphics.Color.Gray
+                )
+            }
+
+            // --- THE NEW EXIT BUTTON ---
+            Spacer(modifier = Modifier.weight(1f)) 
+            
+            OutlinedButton(
+                onClick = { exitApp() }, 
+                modifier = Modifier.widthIn(min = 200.dp),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = androidx.compose.ui.graphics.Color(0xFFCF6679)
+                ),
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp, 
+                    androidx.compose.ui.graphics.Color(0xFFCF6679).copy(alpha = 0.5f)
+                )
+            ) {
+                Text("Exit Application")
+            }
+        } // End of Column
+    } // End of Surface
+
+    if (showWifiDialog) {
+        WifiConnectDialog(
+            onDismiss = { showWifiDialog = false }, 
+            onConnect = { ip, port -> 
                 showWifiDialog = false
                 onConnectRequested("WIFI_MANUAL", ip, port)
-            })
-        }
+            }
+        )
     }
+} // End of function
 
     @Composable
     fun StatusCard(status: String) {
@@ -419,12 +550,7 @@ class MainActivity : ComponentActivity() {
 
     override fun dispatchGenericMotionEvent(ev: MotionEvent?): Boolean { return super.dispatchGenericMotionEvent(ev) }
 
-    override fun onWindowFocusChanged(hasFocus: Boolean) {
-        super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) hideSystemUI()
-    }
-
-    private fun hideSystemUI() {
+        private fun hideSystemUI() {
         // Universal Legacy implementation (Works on API 24+ without compileSdk 30 requirements)
         @Suppress("DEPRECATION")
         window.decorView.systemUiVisibility = (

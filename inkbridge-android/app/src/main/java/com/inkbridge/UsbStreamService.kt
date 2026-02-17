@@ -43,12 +43,11 @@ object UsbStreamService {
         }
 
         return try {
-            Log.d(TAG, "Attempting to open accessory: ${accessory.description}")
             fileDescriptor = usbManager.openAccessory(accessory)
 
             if (fileDescriptor == null) {
-                Log.e(TAG, "openAccessory returned NULL")
-                return false
+                Log.e(TAG, "OS refused to open accessory. PC app likely not running.")
+                return false // <--- This prevents the UI switch in MainActivity
             }
 
             val fd: FileDescriptor = fileDescriptor!!.fileDescriptor
