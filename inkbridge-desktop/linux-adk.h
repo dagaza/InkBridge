@@ -17,7 +17,7 @@ struct UsbConnectionConfig {
     std::string manufacturer = "dzadobrischi";
     std::string model = "InkBridgeHost";
     std::string description = "InkBridge Desktop Client";
-    std::string version = "1.0";
+    std::string version = "1.0.0";
     std::string url = "https://github.com/dagaza/InkBridge";
     std::string serial = "INKBRIDGE001";
 };

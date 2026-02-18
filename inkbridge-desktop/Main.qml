@@ -354,7 +354,7 @@ ApplicationWindow {
                     }
                     
                     Label {
-                        text: "v0.2.1-beta"
+                        text: "v1.0.0"
                         font.pixelSize: 11
                         font.weight: Font.Medium
                         color: subTextCol

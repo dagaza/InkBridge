@@ -1,0 +1,22 @@
+# /etc/udev/rules.d/99-inkbridge.rules
+
+# 1. Virtual Tablet Creation (uinput)
+# Allows the app to create the "pen-emu" virtual device
+KERNEL=="uinput", MODE="0660", GROUP="input"
+
+# 2. Android USB Access
+# Grants read/write access to common Android USB Vendor IDs
+# Google (Pixel, Nexus)
+SUBSYSTEM=="usb", ATTR{idVendor}=="18d1", MODE="0666", GROUP="plugdev"
+# Samsung
+SUBSYSTEM=="usb", ATTR{idVendor}=="04e8", MODE="0666", GROUP="plugdev"
+# Xiaomi
+SUBSYSTEM=="usb", ATTR{idVendor}=="2717", MODE="0666", GROUP="plugdev"
+# Huawei
+SUBSYSTEM=="usb", ATTR{idVendor}=="12d1", MODE="0666", GROUP="plugdev"
+# Motorola
+SUBSYSTEM=="usb", ATTR{idVendor}=="22b8", MODE="0666", GROUP="plugdev"
+# LG
+SUBSYSTEM=="usb", ATTR{idVendor}=="1004", MODE="0666", GROUP="plugdev"
+# Sony
+SUBSYSTEM=="usb", ATTR{idVendor}=="054c", MODE="0666", GROUP="plugdev"

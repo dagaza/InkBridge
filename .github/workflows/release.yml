@@ -1,135 +1,149 @@
-name: Release
+name: Build and Package
 
 on:
   push:
-    branches: ["main", "master"]
-    paths:
-      - "android-virtual-pen/**"
-      - "virtual-pen-linux-host/**"
-      - ".github/workflows/release.yml"
-
-permissions:
-  contents: write
+    tags:
+      - 'v*' # Trigger only on version tags like v0.2.1
 
 jobs:
-  version:
-    runs-on: ubuntu-latest
-    outputs:
-      new_tag: ${{ steps.tagger.outputs.new_tag }}
+  # ------------------------------------------------------------------
+  # JOB 1: BUILD .DEB (Ubuntu/Debian)
+  # ------------------------------------------------------------------
+  build-deb:
+    runs-on: ubuntu-20.04
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - uses: actions/checkout@v3
 
-      - name: Create version tag
-        id: tagger
-
-        uses: anothrnick/github-tag-action@v1
-
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          DEFAULT_BUMP: patch
-          RELEASE_BRANCHES: main,master
-          WITH_V: true
-
-  build-android:
-    needs: version
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up JDK
-        uses: actions/setup-java@v4
-        with:
-          distribution: "temurin"
-          java-version: "17"
-
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Build debug APK
-        working-directory: android-virtual-pen
-        run: ./gradlew assembleDebug
-
-      - name: Rename APK
-        run: |
-          tag="${{ needs.version.outputs.new_tag }}"
-          cp android-virtual-pen/app/build/outputs/apk/debug/app-debug.apk "android-virtual-pen-${tag}-debug.apk"
-
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: android-virtual-pen-debug-apk
-          path: android-virtual-pen-${{ needs.version.outputs.new_tag }}-debug.apk
-
-  build-linux:
-    needs: version
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install build dependencies
+      - name: Install Qt and Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake libusb-1.0-0-dev qt6-base-dev libgl1-mesa-dev
+          sudo apt-get install -y build-essential qt5-default qtbase5-dev \
+            qtdeclarative5-dev qtquickcontrols2-5-dev libusb-1.0-0-dev \
+            debhelper devscripts
 
-      - name: Build Linux host
+      - name: Build Project
         run: |
-          cmake -S virtual-pen-linux-host -B build
-          cmake --build build --config Release
+          mkdir build && cd build
+          qmake ../InkBridge.pro
+          make -j$(nproc)
 
-      - name: Package Linux host (tar.gz)
+      - name: Create .deb Package
         run: |
-          tag="${{ needs.version.outputs.new_tag }}"
-          cmake --install build --prefix appdir
-          tar -czf "virtual-pen-linux-host-${tag}-linux-x86_64.tar.gz" -C appdir .
+          # 1. Prepare Directory Structure
+          mkdir -p package/usr/bin
+          mkdir -p package/usr/share/applications
+          mkdir -p package/etc/udev/rules.d
+          mkdir -p package/DEBIAN
 
-      - name: Package Linux host (deb)
-        run: |
-          tag="${{ needs.version.outputs.new_tag }}"
-          version="${tag#v}"
-          cmake --install build --prefix deb_root/usr
-          mkdir -p deb_root/DEBIAN
-          cat <<CONTROL > deb_root/DEBIAN/control
-          Package: virtual-pen
-          Version: ${version}
-          Architecture: amd64
-          Maintainer: Android Virtual Pen CI <ci@users.noreply.github.com>
-          Description: Host program for receiving pen input data from the Android virtual-pen app.
-          Depends: libqt6widgets6, qt6-qpa-plugins, libusb-1.0-0
-          CONTROL
-          dpkg-deb --build deb_root "virtual-pen-linux-host_${tag}_amd64.deb"
+          # 2. Copy Binaries & Configs
+          cp build/inkbridge package/usr/bin/
+          cp assets/inkbridge.desktop package/usr/share/applications/
+          cp assets/99-inkbridge.rules package/etc/udev/rules.d/
+          mkdir -p package/usr/share/icons/hicolor/512x512/apps
+          cp assets/inkbridge.png package/usr/share/icons/hicolor/512x512/apps/
 
-      - name: Upload Linux artifacts
-        uses: actions/upload-artifact@v4
+          # 3. Create Control File
+          echo "Package: inkbridge" > package/DEBIAN/control
+          echo "Version: ${GITHUB_REF#refs/tags/v}" >> package/DEBIAN/control
+          echo "Architecture: amd64" >> package/DEBIAN/control
+          echo "Maintainer: Your Name <you@example.com>" >> package/DEBIAN/control
+          echo "Depends: libc6, libqt5core5a, libqt5gui5, libqt5qml5, libqt5quick5, libusb-1.0-0" >> package/DEBIAN/control
+          echo "Description: Graphics Tablet Driver for Android Devices" >> package/DEBIAN/control
+
+          # 4. Build .deb
+          dpkg-deb --build package inkbridge-${GITHUB_REF#refs/tags/v}_amd64.deb
+
+      - name: Upload .deb Artifact
+        uses: actions/upload-artifact@v3
         with:
-          name: linux-packages
-          path: |
-            virtual-pen-linux-host-${{ needs.version.outputs.new_tag }}-linux-x86_64.tar.gz
-            virtual-pen-linux-host_${{ needs.version.outputs.new_tag }}_amd64.deb
+          name: inkbridge-deb
+          path: inkbridge-*.deb
 
-  release:
-    needs: [version, build-android, build-linux]
+  # ------------------------------------------------------------------
+  # JOB 2: BUILD .RPM (Fedora/OpenSUSE)
+  # ------------------------------------------------------------------
+  build-rpm:
     runs-on: ubuntu-latest
+    container: fedora:latest # Run inside a Fedora container!
     steps:
-      - name: Download APK
-        uses: actions/download-artifact@v4
-        with:
-          name: android-virtual-pen-debug-apk
-          path: ./dist
+      - uses: actions/checkout@v3
 
-      - name: Download Linux artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: linux-packages
-          path: ./dist
+      - name: Install Dependencies
+        run: |
+          dnf install -y gcc-c++ make qt5-qtbase-devel qt5-qtdeclarative-devel \
+            qt5-qtquickcontrols2-devel libusb1-devel rpm-build
 
-      - name: Publish GitHub release
-        uses: softprops/action-gh-release@v2
+      - name: Build Project
+        run: |
+          mkdir build && cd build
+          qmake-qt5 ../InkBridge.pro
+          make -j$(nproc)
+
+      - name: Build RPM
+        run: |
+          mkdir -p rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+          
+          # Create Spec File
+          cat <<EOF > rpmbuild/SPECS/inkbridge.spec
+          Name:       inkbridge
+          Version:    ${GITHUB_REF#refs/tags/v}
+          Release:    1%{?dist}
+          Summary:    Graphics Tablet Driver for Android
+          License:    MIT
+          
+          %description
+          Turn your Android device into a professional graphics tablet.
+
+          %install
+          # 1. Create Directories
+          mkdir -p %{buildroot}/usr/bin
+          mkdir -p %{buildroot}/etc/udev/rules.d
+          mkdir -p %{buildroot}/usr/share/applications
+          mkdir -p %{buildroot}/usr/share/icons/hicolor/512x512/apps
+
+          # 2. Copy Files
+          cp /__w/InkBridge/InkBridge/build/inkbridge %{buildroot}/usr/bin/
+          cp /__w/InkBridge/InkBridge/assets/99-inkbridge.rules %{buildroot}/etc/udev/rules.d/
+          cp /__w/InkBridge/InkBridge/assets/inkbridge.desktop %{buildroot}/usr/share/applications/
+          cp /__w/InkBridge/InkBridge/assets/inkbridge.png %{buildroot}/usr/share/icons/hicolor/512x512/apps/
+
+          %files
+          /usr/bin/inkbridge
+          /etc/udev/rules.d/99-inkbridge.rules
+          /usr/share/applications/inkbridge.desktop
+          /usr/share/icons/hicolor/512x512/apps/inkbridge.png
+          EOF
+          
+          rpmbuild -bb rpmbuild/SPECS/inkbridge.spec --define "_topdir $(pwd)/rpmbuild"
+
+      - name: Upload RPM Artifact
+        uses: actions/upload-artifact@v3
         with:
-          tag_name: ${{ needs.version.outputs.new_tag }}
-          files: ./dist/*
-          generate_release_notes: true
+          name: inkbridge-rpm
+          path: rpmbuild/RPMS/*/*.rpm
+
+  # ------------------------------------------------------------------
+  # JOB 3: ARCH LINUX (AUR)
+  # ------------------------------------------------------------------
+  build-arch:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Install Base Devel
+        run: pacman -Syu --noconfirm base-devel qt5-base qt5-declarative qt5-quickcontrols2 libusb git
+
+      - name: Verify Build (PKGBUILD Test)
+        run: |
+          # Create a dummy user because makepkg can't run as root
+          useradd builder -m
+          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+          chown -R builder:builder .
+          
+          # Switch to user and build
+          su builder -c "makepkg -s --noconfirm"
+          
+      # Note: Usually you don't upload the binary for Arch, 
+      # you just upload the PKGBUILD to the AUR. 
+      # This step just verifies your PKGBUILD works.
