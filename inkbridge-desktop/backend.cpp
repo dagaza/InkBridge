@@ -77,7 +77,7 @@ Backend::Backend(QObject *parent)
     startAutoConnect(); 
 
     // FORCE DEBUG ON
-    Backend::isDebugMode = true; // <--- Add
+    Backend::isDebugMode = false; // <--- Add
 }
 
 Backend::~Backend() {
@@ -341,7 +341,7 @@ void Backend::handleBluetoothData(QByteArray data) {
     if (data.isEmpty() || !m_stylus) return;
 
     if (Backend::isDebugMode) {
-        qDebug() << "[BT] Received" << data.size() << "bytes. Hex:" << data.toHex();
+        qDebug() << "[BT] Received" << data.size() << "bytes";
     }
 
     const int packetSize = sizeof(PenPacket);

@@ -27,7 +27,12 @@ static void fillEventData(AccessoryEventData& data, const PenPacket* packet) {
     data.action = packet->action;
     data.x = packet->x;
     data.y = packet->y;
-    data.pressure = static_cast<float>(packet->pressure) / 1000.0f;
+    // Pressure is encoded as (event.pressure * 4096) on Android.
+    // Dividing by 4096.0f restores the original 0.0-1.0 float range.
+    // The previous value of 1000.0f was mismatched, causing values above
+    // 1.0 that PressureTranslator would clamp, squashing most of the
+    // pressure range to maximum.
+    data.pressure = static_cast<float>(packet->pressure) / 4096.0f;
     
     // --- NEW: Copy Tilt Data ---
     data.tiltX = packet->tiltX;
