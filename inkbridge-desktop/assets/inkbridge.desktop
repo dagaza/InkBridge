@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=InkBridge
+Comment=Android Graphics Tablet & Stylus Driver
+Exec=/usr/bin/inkbridge
+Icon=/usr/share/icons/hicolor/512x512/apps/inkbridge.png
+Terminal=false
+Type=Application
+Categories=Graphics;Utility;
+Keywords=tablet;pad;wacom;digitizer;stylus;android;drawing;
+StartupNotify=true

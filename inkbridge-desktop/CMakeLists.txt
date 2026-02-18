@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 # Project Definition
-project(InkBridge VERSION 0.2 LANGUAGES CXX C)
+project(InkBridge VERSION 1.0.0 LANGUAGES CXX C)
 
 # -----------------------------------------------------------------------------
 # 1. Project Configuration & C++20 Standard
@@ -66,7 +66,7 @@ set(PROJECT_SOURCES
     filepermissionvalidator.h
     
     # Resources
-    icon.qrc
+    assets.qrc
     Main.qml  # Included here so it shows up in IDEs
     
     # Legacy C Sources (Required for uinput injection)

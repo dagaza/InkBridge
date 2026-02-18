@@ -1,7 +1,7 @@
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
-#include <QDir>
+#include <QIcon>  // Required for the icon
 #include "backend.h"
 
 int main(int argc, char *argv[])
@@ -13,6 +13,10 @@ int main(int argc, char *argv[])
 
     QGuiApplication app(argc, argv);
 
+    // --- NEW: SET WINDOW ICON ---
+    // This looks inside the binary's resources (assets.qrc)
+    app.setWindowIcon(QIcon(":/assets/inkbridge.png"));
+
     // Register our C++ backend
     Backend backend;
 
@@ -21,19 +25,17 @@ int main(int argc, char *argv[])
     // Inject backend into QML
     engine.rootContext()->setContextProperty("backend", &backend);
 
-    // --- Path Logic for Docker/Linux ---
-    // Look for Main.qml in the same directory as the executable
-    QString qmlPath = QCoreApplication::applicationDirPath() + "/Main.qml";
-    QUrl url = QUrl::fromLocalFile(qmlPath);
+    // --- IMPROVED: RESOURCE PATH LOGIC ---
+    // Instead of looking for a local file, we look inside the compiled resources.
+    // This makes the binary standalone.
+    const QUrl url(QStringLiteral("qrc:/Main.qml"));
 
-    // Connect the safety signal to catch if the QML fails to load (e.g., missing module)
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreated,
                      &app, [url](QObject *obj, const QUrl &objUrl) {
         if (!obj && url == objUrl)
             QCoreApplication::exit(-1);
     }, Qt::QueuedConnection);
     
-    // Load the UI
     engine.load(url);
 
     return app.exec();

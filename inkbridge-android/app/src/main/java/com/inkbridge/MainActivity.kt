@@ -1,6 +1,7 @@
 package com.inkbridge
 
 import android.annotation.SuppressLint
+import android.app.Activity
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -19,6 +20,7 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.TextView
+import androidx.appcompat.app.AppCompatDelegate
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -29,12 +31,15 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cable
 import androidx.compose.material.icons.filled.Usb
 import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -191,15 +196,32 @@ class MainActivity : ComponentActivity() {
             registerReceiver(usbReceiver, filter)
         }
 
+        val prefs = getSharedPreferences("settings", Context.MODE_PRIVATE)
+        val savedMode = prefs.getInt("night_mode", AppCompatDelegate.MODE_NIGHT_YES)
+        AppCompatDelegate.setDefaultNightMode(savedMode)
+
         setContent {
-            MaterialTheme(
-                colorScheme = darkColorScheme(
-                    primary = androidx.compose.ui.graphics.Color(0xFFBB86FC),
-                    secondary = androidx.compose.ui.graphics.Color(0xFF03DAC5),
-                    background = androidx.compose.ui.graphics.Color(0xFF121212),
-                    surface = androidx.compose.ui.graphics.Color(0xFF1E1E1E)
+            // Read the current mode so the theme recomposes when the toggle fires
+            val nightMode = AppCompatDelegate.getDefaultNightMode()
+            val isDark = nightMode != AppCompatDelegate.MODE_NIGHT_NO
+
+            val colorScheme = if (isDark) {
+                darkColorScheme(
+                    primary     = androidx.compose.ui.graphics.Color(0xFFBB86FC),
+                    secondary   = androidx.compose.ui.graphics.Color(0xFF03DAC5),
+                    background  = androidx.compose.ui.graphics.Color(0xFF121212),
+                    surface     = androidx.compose.ui.graphics.Color(0xFF1E1E1E)
                 )
-            ) {
+            } else {
+                lightColorScheme(
+                    primary     = androidx.compose.ui.graphics.Color(0xFF6200EE),
+                    secondary   = androidx.compose.ui.graphics.Color(0xFF03DAC5),
+                    background  = androidx.compose.ui.graphics.Color(0xFFF5F5F5),
+                    surface     = androidx.compose.ui.graphics.Color(0xFFFFFFFF)
+                )
+            }
+
+            MaterialTheme(colorScheme = colorScheme) {
                 LaunchedEffect(isConnected) {
                     if (isConnected) {
                         if (wakeLock?.isHeld == false) wakeLock?.acquire(10 * 60 * 1000L)
@@ -208,7 +230,6 @@ class MainActivity : ComponentActivity() {
                         if (wakeLock?.isHeld == true) wakeLock?.release()
                     }
                 }
-
                 if (isConnected) {
                     DrawingPad(onDisconnect = { disconnectAll() })
                 } else {
@@ -450,96 +471,124 @@ fun InkBridgeDashboard(
     onConnectRequested: (method: String, ip: String, port: String) -> Unit
 ) {
     var showWifiDialog by remember { mutableStateOf(false) }
+    
+    // Read saved preference, default to dark
+    val context = LocalContext.current
+    val prefs = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+    var isDarkTheme by remember {
+        mutableStateOf(
+            prefs.getInt("night_mode", AppCompatDelegate.MODE_NIGHT_YES) == AppCompatDelegate.MODE_NIGHT_YES
+        )
+    }
 
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-        Column(
-            modifier = Modifier.fillMaxSize().padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Text(
-                text = "InkBridge", 
-                style = MaterialTheme.typography.displayLarge, 
-                color = MaterialTheme.colorScheme.primary, 
-                fontWeight = FontWeight.Bold
-            )
-            
-            Spacer(modifier = Modifier.height(48.dp))
-            StatusCard(status = status)
+        Box(modifier = Modifier.fillMaxSize()) {
 
-            // --- TROUBLESHOOTING HINT ---
-            if (showTroubleshootingHint) {
+            // ---- THEME TOGGLE (top-right corner) ----
+            IconButton(
+                onClick = {
+                    val newMode = if (isDarkTheme)
+                        AppCompatDelegate.MODE_NIGHT_NO   // was dark, switch to light
+                    else
+                        AppCompatDelegate.MODE_NIGHT_YES  // was light, switch to dark
+                    isDarkTheme = !isDarkTheme
+                    AppCompatDelegate.setDefaultNightMode(newMode)
+                    prefs.edit().putInt("night_mode", newMode).apply()
+                    (context as? Activity)?.recreate()
+                },
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(16.dp)
+            ) {
+                Icon(
+                    imageVector = if (isDarkTheme) Icons.Default.LightMode else Icons.Default.DarkMode,
+                    contentDescription = if (isDarkTheme) "Switch to light mode" else "Switch to dark mode",
+                    tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+                )
+            }
+            // -----------------------------------------
+
+            Column(
+                modifier = Modifier.fillMaxSize().padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    text = "InkBridge",
+                    style = MaterialTheme.typography.displayLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold
+                )
+
+                Spacer(modifier = Modifier.height(48.dp))
+                StatusCard(status = status)
+
+                if (showTroubleshootingHint) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Card(
+                        colors = CardDefaults.cardColors(
+                            containerColor = androidx.compose.ui.graphics.Color(0xFF332200)
+                        ),
+                        modifier = Modifier.padding(horizontal = 16.dp)
+                    ) {
+                        Text(
+                            text = "First time connecting? If you just checked 'Always allow', please press Connect again.",
+                            color = androidx.compose.ui.graphics.Color(0xFFFFCC00),
+                            modifier = Modifier.padding(12.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(48.dp))
+
+                ConnectButton("Connect via USB", Icons.Default.Usb) {
+                    onConnectRequested("USB", "", "")
+                }
+
+                // --- HIDE WIFI FOR V0.2 ---
+                /*
                 Spacer(modifier = Modifier.height(16.dp))
-                Card(
-                    colors = CardDefaults.cardColors(
-                        containerColor = androidx.compose.ui.graphics.Color(0xFF332200)
+                ConnectButton("Auto-Discover WiFi", Icons.Default.Wifi) {
+                    onConnectRequested("WIFI_DISCOVER", "", "")
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+                TextButton(onClick = { showWifiDialog = true }) {
+                    Text(text = "Manual IP Input", color = androidx.compose.ui.graphics.Color.Gray)
+                }
+                */
+                // --------------------------
+
+                Spacer(modifier = Modifier.weight(1f))
+
+                OutlinedButton(
+                    onClick = { exitApp() },
+                    modifier = Modifier.widthIn(min = 200.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = androidx.compose.ui.graphics.Color(0xFFCF6679)
                     ),
-                    modifier = Modifier.padding(horizontal = 16.dp)
-                ) {
-                    Text(
-                        text = "First time connecting? If you just checked 'Always allow', please press Connect again.",
-                        color = androidx.compose.ui.graphics.Color(0xFFFFCC00),
-                        modifier = Modifier.padding(12.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp,
+                        androidx.compose.ui.graphics.Color(0xFFCF6679).copy(alpha = 0.5f)
                     )
+                ) {
+                    Text("Exit Application")
                 }
             }
-
-            Spacer(modifier = Modifier.height(48.dp))
-            
-            ConnectButton("Connect via USB", Icons.Default.Usb) { 
-                onConnectRequested("USB", "", "") 
-            }
-            
-            // --- HIDE WIFI FOR V0.2 ---
-            /*
-            Spacer(modifier = Modifier.height(16.dp))
-            
-            ConnectButton("Auto-Discover WiFi", Icons.Default.Wifi) { 
-                onConnectRequested("WIFI_DISCOVER", "", "") 
-            }
-            
-            Spacer(modifier = Modifier.height(16.dp))
-            
-            TextButton(onClick = { showWifiDialog = true }) {
-                Text(
-                    text = "Manual IP Input", 
-                    color = androidx.compose.ui.graphics.Color.Gray
-                )
-            }
-            */
-            // --------------------------
-
-            // --- THE NEW EXIT BUTTON ---
-            Spacer(modifier = Modifier.weight(1f)) 
-            
-            OutlinedButton(
-                onClick = { exitApp() }, 
-                modifier = Modifier.widthIn(min = 200.dp),
-                colors = ButtonDefaults.outlinedButtonColors(
-                    contentColor = androidx.compose.ui.graphics.Color(0xFFCF6679)
-                ),
-                border = androidx.compose.foundation.BorderStroke(
-                    1.dp, 
-                    androidx.compose.ui.graphics.Color(0xFFCF6679).copy(alpha = 0.5f)
-                )
-            ) {
-                Text("Exit Application")
-            }
-        } // End of Column
-    } // End of Surface
+        }
+    }
 
     if (showWifiDialog) {
         WifiConnectDialog(
-            onDismiss = { showWifiDialog = false }, 
-            onConnect = { ip, port -> 
+            onDismiss = { showWifiDialog = false },
+            onConnect = { ip, port ->
                 showWifiDialog = false
                 onConnectRequested("WIFI_MANUAL", ip, port)
             }
         )
     }
-} // End of function
+}
 
     @Composable
     fun StatusCard(status: String) {
