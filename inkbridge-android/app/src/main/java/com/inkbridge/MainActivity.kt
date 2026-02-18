@@ -44,6 +44,10 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 
 class MainActivity : ComponentActivity() {
 
@@ -90,6 +94,19 @@ class MainActivity : ComponentActivity() {
                 finishAffinity()
                 System.exit(0)
             }
+        }
+    }
+
+    // Permission Launcher for Android 13+ Wi-Fi scanning
+    private val requestWifiPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted: Boolean ->
+        if (isGranted) {
+            // Permission granted! Start the scan.
+            val rootView = window.decorView.findViewById<View>(android.R.id.content)
+            runWifiDiscovery(rootView)
+        } else {
+            statusMessage = "Permission Denied. Cannot Scan."
         }
     }
 
@@ -203,10 +220,13 @@ class MainActivity : ComponentActivity() {
                         onConnectRequested = { method, ip, port ->
                             if (method == "USB") {
                                 findAndConnectUsb(rootView)
-                            } else if (method == "WIFI_DISCOVER") {
-                                attemptWifiDiscovery(rootView)
-                            } else {
-                                attemptWifiConnection(ip, port, rootView)
+                            /* Disabled for V0.2
+                        else if (method == "WIFI_DISCOVER") {
+                            attemptWifiDiscovery(rootView)
+                        } else {
+                            attemptWifiConnection(ip, port, rootView)
+                        }
+                        */
                             }
                         }
                     )
@@ -323,7 +343,26 @@ class MainActivity : ComponentActivity() {
     // LOGIC: WIFI CONNECTION (Unchanged)
     // ==========================================
 
+    // 1. THE GATEKEEPER: Checks permission first
     private fun attemptWifiDiscovery(view: View) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            // On Android 13+, we must ask for permission explicitly
+            val permission = Manifest.permission.NEARBY_WIFI_DEVICES
+            
+            if (ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED) {
+                runWifiDiscovery(view)
+            } else {
+                statusMessage = "Requesting Wi-Fi Permission..."
+                requestWifiPermissionLauncher.launch(permission)
+            }
+        } else {
+            // Older Android versions don't need runtime permission for this
+            runWifiDiscovery(view)
+        }
+    }
+
+    // 2. THE WORKER: Performs the actual scan (Renamed from old attemptWifiDiscovery)
+    private fun runWifiDiscovery(view: View) {
         statusMessage = "Scanning for PC..."
         lifecycleScope.launch(Dispatchers.IO) {
             val ip = NetworkStreamService.discoverServerIP()
@@ -448,6 +487,8 @@ fun InkBridgeDashboard(
                 onConnectRequested("USB", "", "") 
             }
             
+            // --- HIDE WIFI FOR V0.2 ---
+            /*
             Spacer(modifier = Modifier.height(16.dp))
             
             ConnectButton("Auto-Discover WiFi", Icons.Default.Wifi) { 
@@ -462,6 +503,8 @@ fun InkBridgeDashboard(
                     color = androidx.compose.ui.graphics.Color.Gray
                 )
             }
+            */
+            // --------------------------
 
             // --- THE NEW EXIT BUTTON ---
             Spacer(modifier = Modifier.weight(1f)) 

@@ -263,9 +263,10 @@ ApplicationWindow {
                 // Wi-Fi Connect Button with animation
                 Button {
                     id: wifiBtn
+                    visible: false // Hide for now until the wi-fi beacon feature is implemented
                     Layout.fillWidth: true
                     Layout.preferredHeight: 48
-                    text: backend.isWifiRunning ? "Disconnect (Wi-Fi)" : "Connect (Wi-Fi)"
+                    text: backend.isWifiRunning ? "Stop Wi-Fi Beacon" : "Start Wi-Fi Beacon"
                     
                     property color baseColor: backend.isWifiRunning ? errorCol : wifiCol
                     property color hoverColor: backend.isWifiRunning ? Qt.darker(errorCol, 1.1) : Qt.darker(wifiCol, 1.1)

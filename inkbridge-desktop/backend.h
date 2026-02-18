@@ -14,7 +14,7 @@
 #include <thread> // REQUIRED
 #include <chrono> // REQUIRED
 #include <libusb-1.0/libusb.h>
-
+#include "wifiserver.h"
 #include "virtualstylus.h"
 #include "accessory.h"
 #include "displayscreentranslator.h"
@@ -80,6 +80,7 @@ private:
     VirtualStylus *m_stylus;
     DisplayScreenTranslator *m_displayTranslator;
     PressureTranslator *m_pressureTranslator;
+    WifiServer *m_wifiServer;
     
     QVector<QRect> m_screenRects;
     QVariantList m_screenGeometriesVariant;
@@ -97,6 +98,7 @@ private:
     bool m_swapAxis;
 
     void updateStatus(QString msg, bool connected);
+    void handleWifiData(QByteArray data);
 
     // --- NEW: Auto-Connect Private Members ---
     std::atomic<bool> m_autoScanRunning;

@@ -15,18 +15,21 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 # -----------------------------------------------------------------------------
-# 2. Dependencies (Qt Quick + LibUSB)
+# 2. Dependencies (Qt Quick + LibUSB + Network)
 # -----------------------------------------------------------------------------
-# We search for Quick, Qml, Core, and Widgets (Widgets kept for legacy safety)
-find_package(Qt6 COMPONENTS Quick Qml Core Gui Widgets QUIET)
+# UPDATED: Added 'Network' component to both Qt6 and Qt5 blocks
+find_package(Qt6 COMPONENTS Quick Qml Core Gui Widgets Network QUIET)
 
 if(Qt6_FOUND)
     message(STATUS "Building with Qt 6 (${Qt6_VERSION})")
-    set(QT_LIBS Qt6::Quick Qt6::Qml Qt6::Core Qt6::Gui Qt6::Widgets)
+    # UPDATED: Added Qt6::Network
+    set(QT_LIBS Qt6::Quick Qt6::Qml Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network)
 else()
     message(STATUS "Qt 6 not found, falling back to Qt 5...")
-    find_package(Qt5 COMPONENTS Quick Qml Core Gui Widgets REQUIRED)
-    set(QT_LIBS Qt5::Quick Qt5::Qml Qt5::Core Qt5::Gui Qt5::Widgets)
+    # UPDATED: Added Network component
+    find_package(Qt5 COMPONENTS Quick Qml Core Gui Widgets Network REQUIRED)
+    # UPDATED: Added Qt5::Network
+    set(QT_LIBS Qt5::Quick Qt5::Qml Qt5::Core Qt5::Gui Qt5::Widgets Qt5::Network)
 endif()
 
 find_package(PkgConfig REQUIRED)
@@ -43,6 +46,11 @@ set(PROJECT_SOURCES
     backend.cpp
     backend.h
     
+    # NEW: Networking (Phase 6)
+    wifiserver.cpp
+    wifiserver.h
+    protocol.h
+
     # Logic (Preserved from Phase 3/4)
     accessory.cpp
     accessory.h

@@ -8,7 +8,8 @@ LIBS += -lusb-1.0
 
 SOURCES += \
     main.cpp \
-    mainwindow.cpp \
+    backend.cpp \           # <--- Add this
+    wifiserver.cpp \        # <--- Add this
     virtualstylus.cpp \
     linux-adk.cpp \
     hid.cpp \
@@ -21,7 +22,8 @@ SOURCES += \
     uinput.c
 
 HEADERS += \
-    mainwindow.h \
+    backend.h \             # <--- Add this
+    wifiserver.h \          # <--- Add this
     virtualstylus.h \
     linux-adk.h \
     hid.h \

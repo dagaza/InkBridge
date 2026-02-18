@@ -2,7 +2,8 @@
 #include "linux-adk.h"
 #include <libusb-1.0/libusb.h>
 #include <iostream> // For std::cout if needed, though qDebug is preferred for Qt
-
+#include "protocol.h"  // For PenPacket struct
+#include "accessory.h" // For AccessoryEventData struct
 // AOA Protocol Constants
 #define AOA_GET_PROTOCOL    51
 #define AOA_SEND_STRING     52
@@ -28,11 +29,28 @@ Backend::Backend(QObject *parent)
     m_pressureTranslator = new PressureTranslator();
     m_stylus = new VirtualStylus(m_displayTranslator, m_pressureTranslator);
     
+    
+    // --- DISABLE WIFI FOR V0.2 ---
+    // m_wifiServer = new WifiServer(this);
+    // connect(m_wifiServer, &WifiServer::clientConnected, this, [this](QString ip){
+    //     qDebug() << "UI Update: Client connected from" << ip;
+    //     updateStatus("Connected via Wi-Fi (" + ip + ")", true);
+    // });
+
+    // connect(m_wifiServer, &WifiServer::clientDisconnected, this, [this](){
+    //     qDebug() << "UI Update: Client disconnected";
+    //     updateStatus("Wi-Fi Listening...", false);
+    // });   
+    // -----------------------------
+
     m_stylus->initializeStylus();
     refreshScreens();
    
     // OPTIONAL: Start scanning immediately on launch
     startAutoConnect(); 
+
+    // FORCE DEBUG ON
+    Backend::isDebugMode = true; // <--- Add
 }
 
 Backend::~Backend() {
@@ -187,17 +205,75 @@ void Backend::setSwapAxis(bool swap) {
 }
 
 void Backend::toggleWifi() {
-    m_wifiRunning = !m_wifiRunning;
+    // --- FEATURE DISABLED FOR V0.2 ---
+    return;
     
-    // Placeholder logic for Wi-Fi Server
+    /* m_wifiRunning = !m_wifiRunning;
+    
     if (m_wifiRunning) {
-        qDebug() << "Wi-Fi Server Started";
-        // Start your server logic here
+        bool started = m_wifiServer->startServer(4546, 4545);
+        if (started) {
+            updateStatus("Wi-Fi Listening (Waiting for Tablet...)", false);
+        } else {
+            updateStatus("Wi-Fi Error: Could not bind port", false);
+            m_wifiRunning = false; 
+        }
     } else {
-        qDebug() << "Wi-Fi Server Stopped";
-        // Stop server logic here
+        m_wifiServer->stopServer();
+        updateStatus("Wi-Fi Stopped", false);
     }
     emit wifiStatusChanged();
+    */
+}
+
+void Backend::handleWifiData(QByteArray data) {
+    // 1. Safety Check
+    if (data.isEmpty() || !m_stylus) return;
+
+    // DEBUG: Print data size
+    if (Backend::isDebugMode) {
+        qDebug() << "[WiFi] Received" << data.size() << "bytes. Hex:" << data.toHex(); 
+    }
+
+    // 2. Define the Protocol Size (22 Bytes)
+    // We use sizeof(PenPacket) to be safe, ensuring it matches protocol.h
+    const int packetSize = sizeof(PenPacket); 
+
+    // 3. Process the Buffer
+    // TCP streams can bundle multiple packets together. We loop through them.
+    int offset = 0;
+    while (offset + packetSize <= data.size()) {
+        
+        // A. Cast the raw bytes to our packed struct
+        // We use constData() to get the raw char* pointer
+        const PenPacket* packet = reinterpret_cast<const PenPacket*>(data.constData() + offset);
+
+        // B. Convert to Internal Format (AccessoryEventData)
+        // This matches the logic in accessory.cpp exactly
+        AccessoryEventData eventData;
+        eventData.toolType = packet->toolType; //
+        eventData.action   = packet->action;   //
+        eventData.x        = packet->x;        //
+        eventData.y        = packet->y;        //
+        
+        // Pressure is sent as Int (0-1000) but Stylus expects Float (0.0-1.0)
+        eventData.pressure = static_cast<float>(packet->pressure) / 1000.0f; 
+        
+        eventData.tiltX    = packet->tiltX;    //
+        eventData.tiltY    = packet->tiltY;    //
+
+        // C. Drive the Stylus
+        // This enters the thread-safe VirtualStylus logic
+        m_stylus->handleAccessoryEventData(&eventData);
+
+        // D. Advance to the next packet
+        offset += packetSize;
+    }
+    
+    // Optional: If offset < data.size(), we have a partial packet (fragmentation).
+    // For a local LAN Stylus, this is rare, but a ring-buffer would solve it 100%.
+    // For this implementation, dropping the partial fragment is acceptable 
+    // because the next pen event comes in <8ms.
 }
 
 void Backend::toggleDebug(bool enable) {

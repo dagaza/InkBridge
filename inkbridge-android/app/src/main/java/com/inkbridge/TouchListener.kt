@@ -9,7 +9,7 @@ import java.nio.ByteOrder
 
 class TouchListener(private val outputStream: OutputStream) : View.OnTouchListener, View.OnGenericMotionListener {
 
-    private val buffer = ByteBuffer.allocate(26).order(ByteOrder.LITTLE_ENDIAN)
+    private val buffer = ByteBuffer.allocate(22).order(ByteOrder.LITTLE_ENDIAN)
     private val TAG = "InkBridgeTouch"
 
     // --- 1. BLOCK INTERCEPTS (Fixes Samsung Gestures) ---
