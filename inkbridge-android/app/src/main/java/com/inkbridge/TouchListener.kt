@@ -32,12 +32,8 @@ class TouchListener(private val outputStream: OutputStream) : View.OnTouchListen
         val action = event.actionMasked
         val toolType = event.getToolType(0)
 
-        // --- DETECT BUTTON FOR ERASER ---
-        // Check if the primary stylus button is held down
+        // --- BUTTON LOGIC ---
         val isButtonPressed = (event.buttonState and MotionEvent.BUTTON_STYLUS_PRIMARY) != 0
-
-        // Pack the button state into Bit 5 (add 32 to the action code)
-        // This tells the desktop: "The button is pressed!"
         val actionWithButton = if (isButtonPressed) action or 32 else action
 
         // --- COORDINATES ---
@@ -46,29 +42,40 @@ class TouchListener(private val outputStream: OutputStream) : View.OnTouchListen
         val w = view.width.toFloat()
         val h = view.height.toFloat()
 
-        // Normalize coordinates to 0..32767 range (Standard for USB HID)
         val finalX = ((x / w) * 32767).toInt().coerceIn(0, 32767)
         val finalY = ((y / h) * 32767).toInt().coerceIn(0, 32767)
-
-        // Pressure (0..4096 is standard, Android gives 0.0..1.0)
         val pressure = (event.pressure * 4096).toInt()
 
-        // Tilt (Standard Android Tilt is in degrees, we send as-is for now)
-        // Note: Some styluses might need scaling here depending on your C++ backend
-        val tiltX = event.getAxisValue(MotionEvent.AXIS_TILT).toInt()
-        val tiltY = 0 // Android usually provides a combined tilt or requires complex calculation for Y
+        // --- FIX: TILT CALCULATION ---
+        // 1. Get raw values (Radians)
+        // AXIS_TILT: Angle between screen vertical and stylus (0 to 1.57)
+        // AXIS_ORIENTATION: Direction stylus is pointing (-PI to PI)
+        val tiltRad = event.getAxisValue(MotionEvent.AXIS_TILT)
+        val orientationRad = event.getAxisValue(MotionEvent.AXIS_ORIENTATION)
 
+        // 2. Convert Spherical (Tilt/Orient) to Cartesian (TiltX/TiltY)
+        // Math: We project the tilt magnitude onto the X and Y axes.
+        // We multiply by 57.295 (180/PI) to convert Radians to Degrees.
+        // Range: -90 to +90 degrees (Standard for Linux Stylus)
+        val sinTilt = Math.sin(tiltRad.toDouble())
+        
+        // Note: Android Orientation is usually: 0=Up, -PI/2=Left. 
+        // We might need to adjust signs depending on your specific Linux driver expectation,
+        // but this is the standard geometric projection.
+        val tiltXDeg = (sinTilt * Math.sin(orientationRad.toDouble()) * 90).toInt()
+        val tiltYDeg = (sinTilt * Math.cos(orientationRad.toDouble()) * 90).toInt()
+        
         synchronized(buffer) {
             buffer.clear()
-            // Protocol:
-            // [ToolType: 1] [Action: 1] [X: 4] [Y: 4] [Pressure: 4] [TiltX: 4] [TiltY: 4] ...
             buffer.put(toolType.toByte())
-            buffer.put(actionWithButton.toByte()) // Send the modified action
+            buffer.put(actionWithButton.toByte())
             buffer.putInt(finalX)
             buffer.putInt(finalY)
             buffer.putInt(pressure)
-            buffer.putInt(tiltX)
-            buffer.putInt(tiltY)
+            
+            // Send calculated DEGREES, not truncated radians
+            buffer.putInt(tiltXDeg) 
+            buffer.putInt(tiltYDeg) 
 
             try {
                 outputStream.write(buffer.array())

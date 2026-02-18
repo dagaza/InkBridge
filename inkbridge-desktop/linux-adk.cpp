@@ -62,8 +62,17 @@ bool UsbConnection::isAccessoryPresent() {
         libusb_device_handle* raw_handle = libusb_open_device_with_vid_pid(nullptr, VID, pid);
         if (raw_handle) {
             std::cout << "Found accessory " << std::hex << VID << ":" << pid << std::dec << std::endl;
+            
             // Transfer ownership to unique_ptr
             handle.reset(raw_handle);
+
+            // --- THE FIX: AUTO-DETACH KERNEL DRIVER ---
+            // This tells libusb: "If the OS (cdc_acm) is holding this, detach it automatically."
+            if (libusb_set_auto_detach_kernel_driver(handle.get(), 1) != LIBUSB_SUCCESS) {
+                std::cerr << "Warning: Could not enable auto-detach kernel driver." << std::endl;
+            }
+            // ------------------------------------------
+
             return true;
         }
     }

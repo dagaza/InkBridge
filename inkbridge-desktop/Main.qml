@@ -14,7 +14,7 @@ ApplicationWindow {
     title: "InkBridge Desktop"
     
     // --- ENHANCED THEME PALETTE ---
-    property bool isDark: true
+    property bool isDark: false
     property color bgCol: isDark ? "#0a0a0a" : "#fafafa"
     property color sidebarCol: isDark ? "#161616" : "#ffffff"
     property color cardCol: isDark ? "#1e1e1e" : "#ffffff"
@@ -83,7 +83,7 @@ ApplicationWindow {
                 anchors.bottomMargin: 24
                 spacing: 24
 
-                // 1. HEADER with subtle animation
+                // 1. HEADER
                 Item {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 50
@@ -112,10 +112,10 @@ ApplicationWindow {
                     }
                 }
 
-                // 2. ENHANCED STATUS CARD
+                // 2. ENHANCED STATUS CARD (Simplified)
                 Rectangle {
                     Layout.fillWidth: true
-                    implicitHeight: backend.isConnected ? 90 : 72 // Taller when button is visible
+                    implicitHeight: 76 // Fixed height now
                     radius: 12
                     color: backend.isConnected ? Qt.rgba(0, 200/255, 83/255, 0.12) : Qt.rgba(160/255, 160/255, 160/255, 0.08)
                     border.color: backend.isConnected ? Qt.rgba(0, 200/255, 83/255, 0.4) : Qt.rgba(160/255, 160/255, 160/255, 0.2)
@@ -123,7 +123,6 @@ ApplicationWindow {
                     
                     Behavior on color { ColorAnimation { duration: longAnimDuration } }
                     Behavior on border.color { ColorAnimation { duration: longAnimDuration } }
-                    Behavior on implicitHeight { NumberAnimation { duration: animDuration } }
 
                     RowLayout {
                         anchors.fill: parent
@@ -134,8 +133,7 @@ ApplicationWindow {
                         Item {
                             width: 14
                             height: 14
-                            Layout.alignment: Qt.AlignTop | Qt.AlignLeft
-                            Layout.topMargin: 4 
+                            Layout.alignment: Qt.AlignVCenter // Centered vertically now
                             
                             Rectangle {
                                 anchors.centerIn: parent
@@ -159,6 +157,7 @@ ApplicationWindow {
                         ColumnLayout {
                             Layout.fillWidth: true
                             spacing: 3
+                            Layout.alignment: Qt.AlignVCenter
                             
                             Label {
                                 text: "STATUS"
@@ -176,36 +175,71 @@ ApplicationWindow {
                                 color: backend.isConnected ? successCol : textCol
                                 Behavior on color { ColorAnimation { duration: longAnimDuration } }
                             }
-
-                            // --- NEW: Reset Button (Visible only when connected) ---
-                            Button {
-                                visible: backend.isConnected
-                                text: "Reset Connection"
-                                flat: true
-                                Layout.preferredHeight: 20
-                                Layout.topMargin: 2
-                                
-                                contentItem: Text {
-                                    text: parent.text
-                                    font.pixelSize: 11
-                                    font.underline: true
-                                    // Use the window properties for colors
-                                    color: parent.down ? accentCol : subTextCol
-                                    horizontalAlignment: Text.AlignLeft
-                                    verticalAlignment: Text.AlignTop
-                                    
-                                    Behavior on color { ColorAnimation { duration: 100 } }
-                                }
-                                
-                                background: Item {} // Transparent background
-                                
-                                onClicked: {
-                                    console.log("Resetting USB...");
-                                    backend.forceUsbReset();
-                                }
-                            }
-                            // -------------------------------------------------------
                         }
+                    }
+                }
+
+                // 3. SEPARATE RESET BUTTON (With Tooltip)
+                Button {
+                    id: resetBtn
+                    visible: backend.isConnected
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 44
+                    text: "Reset Connection"
+                    
+                    property color baseColor: "transparent"
+                    property color hoverColor: isDark ? Qt.rgba(1,1,1,0.05) : Qt.rgba(0,0,0,0.05)
+                    property color borderColor: warningCol
+
+                    contentItem: Text {
+                        text: parent.text
+                        font.weight: Font.Medium
+                        font.pixelSize: 13
+                        color: warningCol // Use warning color to indicate this is a "fix" action
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                        Behavior on color { ColorAnimation { duration: animDuration } }
+                    }
+                    
+                    background: Rectangle {
+                        color: parent.down ? parent.hoverColor : (parent.hovered ? parent.hoverColor : parent.baseColor)
+                        border.color: parent.borderColor
+                        border.width: 1
+                        radius: 10
+                        opacity: parent.enabled ? 1 : 0.5
+                        
+                        Behavior on color { ColorAnimation { duration: animDuration } }
+                    }
+
+                    // --- TOOLTIP ---
+                    ToolTip {
+                        visible: parent.hovered
+                        delay: 500
+                        timeout: 5000
+                        
+                        contentItem: Text {
+                            text: "Cuts USB connection and restarts the\nAndroid app to fix connectivity issues."
+                            color: isDark ? "#ffffff" : "#000000"
+                            font.pixelSize: 12
+                        }
+                        
+                        background: Rectangle {
+                            color: isDark ? "#404040" : "#ffffff"
+                            border.color: borderCol
+                            radius: 4
+                            layer.enabled: true
+                            layer.effect: DropShadow {
+                                transparentBorder: true
+                                radius: 4
+                                samples: 9
+                                color: "#40000000"
+                            }
+                        }
+                    }
+                    
+                    onClicked: {
+                        console.log("Resetting USB...");
+                        backend.forceUsbReset();
                     }
                 }
 
@@ -844,94 +878,43 @@ ApplicationWindow {
                                     Behavior on color { ColorAnimation { duration: animDuration } }
                                 }
 
-                                // Toggles
+                                // Toggles (Only Fix Rotation remains here)
                                 RowLayout {
                                     Layout.fillWidth: true
-                                    spacing: 40
-                                    
-                                    RowLayout {
-                                        spacing: 12
-                                        Label {
-                                            text: "Dark Mode"
-                                            color: textCol
-                                            font.pixelSize: 14
-                                            font.weight: Font.Medium
-                                            Behavior on color { ColorAnimation { duration: animDuration } }
-                                        }
-                                        Switch {
-                                            checked: isDark
-                                            onToggled: isDark = checked
-                                            
-                                            indicator: Rectangle {
-                                                implicitWidth: 48
-                                                implicitHeight: 28
-                                                x: parent.leftPadding
-                                                y: parent.height / 2 - height / 2
-                                                radius: 14
-                                                color: parent.checked ? accentCol : (isDark ? "#3a3a3a" : "#cccccc")
-                                                
-                                                Behavior on color { ColorAnimation { duration: animDuration } }
-
-                                                Rectangle {
-                                                    x: parent.parent.checked ? parent.width - width - 3 : 3
-                                                    y: (parent.height - height) / 2
-                                                    width: 22
-                                                    height: 22
-                                                    radius: 11
-                                                    color: "white"
-                                                    
-                                                    Behavior on x { NumberAnimation { duration: animDuration; easing.type: Easing.OutQuad } }
-                                                    
-                                                    layer.enabled: true
-                                                    layer.effect: DropShadow {
-                                                        transparentBorder: true
-                                                        horizontalOffset: 0
-                                                        verticalOffset: 1
-                                                        radius: 3.0
-                                                        samples: 7
-                                                        color: Qt.rgba(0, 0, 0, 0.25)
-                                                    }
-                                                }
-                                            }
-                                        }
+                                    spacing: 12
+                                    Label {
+                                        text: "Fix Rotation (Swap X/Y)"
+                                        color: textCol
+                                        font.pixelSize: 14
+                                        font.weight: Font.Medium
+                                        Behavior on color { ColorAnimation { duration: animDuration } }
                                     }
-                                    
-                                    RowLayout {
-                                        spacing: 12
-                                        Label {
-                                            text: "Fix Rotation (Swap X/Y)"
-                                            color: textCol
-                                            font.pixelSize: 14
-                                            font.weight: Font.Medium
-                                            Behavior on color { ColorAnimation { duration: animDuration } }
-                                        }
-                                        CheckBox {
-                                            checked: backend.swapAxis
-                                            onToggled: backend.setSwapAxis(checked)
+                                    CheckBox {
+                                        checked: backend.swapAxis
+                                        onToggled: backend.setSwapAxis(checked)
+                                        
+                                        indicator: Rectangle {
+                                            implicitWidth: 22
+                                            implicitHeight: 22
+                                            x: parent.leftPadding
+                                            y: parent.height / 2 - height / 2
+                                            radius: 5
+                                            border.color: parent.checked ? accentCol : borderCol
+                                            border.width: 2
+                                            color: parent.checked ? accentCol : "transparent"
                                             
-                                            indicator: Rectangle {
-                                                implicitWidth: 22
-                                                implicitHeight: 22
-                                                x: parent.leftPadding
-                                                y: parent.height / 2 - height / 2
-                                                radius: 5
-                                                border.color: parent.checked ? accentCol : borderCol
-                                                border.width: 2
-                                                color: parent.checked ? accentCol : "transparent"
+                                            Behavior on color { ColorAnimation { duration: animDuration } }
+                                            Behavior on border.color { ColorAnimation { duration: animDuration } }
+                                            
+                                            Text {
+                                                anchors.centerIn: parent
+                                                text: "✓"
+                                                color: "white"
+                                                font.pixelSize: 14
+                                                font.bold: true
+                                                opacity: parent.parent.checked ? 1 : 0
                                                 
-                                                Behavior on color { ColorAnimation { duration: animDuration } }
-                                                Behavior on border.color { ColorAnimation { duration: animDuration } }
-                                                
-                                                Text {
-                                                    anchors.centerIn: parent
-                                                    text: "✓"
-                                                    color: "white"
-                                                    font.pixelSize: 14
-                                                    font.bold: true
-                                                    opacity: parent.parent.checked ? 1 : 0
-                                                    
-                                                    Behavior on opacity { NumberAnimation { duration: 150 } }
-                                                }
+                                                Behavior on opacity { NumberAnimation { duration: 150 } }
                                             }
                                         }
                                     }
@@ -949,41 +932,6 @@ ApplicationWindow {
                                 RowLayout {
                                     Layout.fillWidth: true
                                     spacing: 12
-                                    
-                                    Button {
-                                        text: "Tilt Calibration/Debugging"
-                                        Layout.fillWidth: true
-                                        Layout.preferredHeight: 44
-                                        checkable: true
-                                        
-                                        property color baseColor: checked ? accentCol : "transparent"
-                                        
-                                        contentItem: Text {
-                                            text: parent.text
-                                            font.pixelSize: 14
-                                            font.weight: Font.Medium
-                                            color: parent.checked ? "white" : textCol
-                                            horizontalAlignment: Text.AlignHCenter
-                                            verticalAlignment: Text.AlignVCenter
-                                            
-                                            Behavior on color { ColorAnimation { duration: animDuration } }
-                                        }
-                                        
-                                        background: Rectangle {
-                                            color: parent.checked ? parent.baseColor : (parent.down ? btnDownCol : (parent.hovered ? btnHoverCol : "transparent"))
-                                            border.color: parent.checked ? "transparent" : borderCol
-                                            border.width: 1
-                                            radius: 8
-                                            
-                                            Behavior on color { ColorAnimation { duration: animDuration } }
-                                            Behavior on border.color { ColorAnimation { duration: animDuration } }
-                                        }
-                                        
-                                        scale: down ? 0.97 : 1.0
-                                        Behavior on scale { NumberAnimation { duration: 100 } }
-                                        
-                                        onCheckedChanged: backend.toggleDebug(checked)
-                                    }
                                     
                                     Button {
                                         text: "Reset Defaults"
@@ -1015,6 +963,94 @@ ApplicationWindow {
                                         Behavior on scale { NumberAnimation { duration: 100 } }
                                         
                                         onClicked: backend.resetDefaults()
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // SECTION 4: THEME SETTINGS
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: 12
+                        
+                        Label {
+                            text: "Theme Settings"
+                            font.weight: Font.Bold
+                            font.pixelSize: 18
+                            font.letterSpacing: -0.3
+                            color: textCol
+                            Behavior on color { ColorAnimation { duration: animDuration } }
+                        }
+
+                        Rectangle {
+                            Layout.fillWidth: true
+                            // Removed implicitHeight calculation to let Layout manage it, 
+                            // or keep it if you want fixed padding. 
+                            // Better approach: use Layout.preferredHeight or let it wrap content with padding.
+                            implicitHeight: 80 // Fixed height for a single-row card looks cleaner
+                            color: cardCol
+                            radius: 12
+                            border.color: borderCol
+                            border.width: 1
+                            
+                            Behavior on color { ColorAnimation { duration: animDuration } }
+                            Behavior on border.color { ColorAnimation { duration: animDuration } }
+
+                            RowLayout {
+                                anchors.fill: parent
+                                anchors.leftMargin: 24
+                                anchors.rightMargin: 24
+                                spacing: 12
+
+                                Label {
+                                    text: "Dark Mode"
+                                    color: textCol
+                                    font.pixelSize: 14
+                                    font.weight: Font.Medium
+                                    Layout.fillWidth: true
+                                    // --- FIX: VERTICAL CENTER ALIGNMENT ---
+                                    Layout.alignment: Qt.AlignVCenter 
+                                    Behavior on color { ColorAnimation { duration: animDuration } }
+                                }
+                                
+                                Switch {
+                                    checked: isDark
+                                    onToggled: isDark = checked
+                                    
+                                    // --- FIX: VERTICAL CENTER ALIGNMENT ---
+                                    Layout.alignment: Qt.AlignVCenter
+                                    
+                                    indicator: Rectangle {
+                                        implicitWidth: 48
+                                        implicitHeight: 28
+                                        x: parent.leftPadding
+                                        y: parent.height / 2 - height / 2
+                                        radius: 14
+                                        color: parent.checked ? accentCol : (isDark ? "#3a3a3a" : "#cccccc")
+                                        
+                                        Behavior on color { ColorAnimation { duration: animDuration } }
+
+                                        Rectangle {
+                                            x: parent.parent.checked ? parent.width - width - 3 : 3
+                                            y: (parent.height - height) / 2
+                                            width: 22
+                                            height: 22
+                                            radius: 11
+                                            color: "white"
+                                            
+                                            Behavior on x { NumberAnimation { duration: animDuration; easing.type: Easing.OutQuad } }
+                                            
+                                            layer.enabled: true
+                                            layer.effect: DropShadow {
+                                                transparentBorder: true
+                                                horizontalOffset: 0
+                                                verticalOffset: 1
+                                                radius: 3.0
+                                                samples: 7
+                                                color: Qt.rgba(0, 0, 0, 0.25)
+                                            }
+                                        }
                                     }
                                 }
                             }
