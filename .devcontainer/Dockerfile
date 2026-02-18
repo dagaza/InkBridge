@@ -1,10 +1,10 @@
 # Use a lightweight version of Ubuntu
 FROM ubuntu:22.04
 
-# Avoid prompts from apt
+# Avoids prompts from apt
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install the missing dependencies
+# Installs the missing dependencies
 RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
@@ -17,8 +17,10 @@ RUN apt-get update && apt-get install -y \
     udev \
     && rm -rf /var/lib/apt/lists/*
 
-# (Optional) Install nice-to-have tools
+# (Optional) Installs nice-to-have tools
 RUN apt-get update && apt-get install -y \
-    gdb \
-    cppcheck \
-    clang-format
+    qtbase5-dev \
+    qtdeclarative5-dev \
+    libqt5svg5-dev \
+    build-essential \
+    cmake

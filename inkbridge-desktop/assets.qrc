@@ -2,5 +2,6 @@
 <RCC version="1.0">
     <qresource prefix="/">
         <file>assets/inkbridge.png</file>
+        <file>assets/inkbridge_wordmark.svg</file>
         <file>Main.qml</file>  </qresource>
 </RCC>

@@ -7,7 +7,6 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.graphics.Color
 import android.hardware.usb.UsbAccessory
 import android.hardware.usb.UsbManager
 import android.os.Build
@@ -25,6 +24,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -36,10 +37,14 @@ import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -429,11 +434,11 @@ class MainActivity : ComponentActivity() {
             modifier = Modifier.fillMaxSize(),
             factory = { context: Context ->
                 FrameLayout(context).apply {
-                    setBackgroundColor(Color.BLACK)
+                    setBackgroundColor(android.graphics.Color.BLACK)
                     
                     val textView = TextView(context).apply {
                         text = "InkBridge Active\n(Touch to Draw)"
-                        setTextColor(Color.DKGRAY)
+                        setTextColor(android.graphics.Color.DKGRAY)
                         textSize = 20f
                         gravity = Gravity.CENTER
                         layoutParams = FrameLayout.LayoutParams(
@@ -513,14 +518,25 @@ fun InkBridgeDashboard(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
-                Text(
-                    text = "InkBridge",
-                    style = MaterialTheme.typography.displayLarge,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.Bold
+                // --- CHANGED: Replaced Text with Image ---
+                Image(
+                    painter = painterResource(id = R.drawable.ic_wordmark),
+                    contentDescription = "InkBridge Logo",
+                    modifier = Modifier
+                        // --- THE FIX ---
+                        // Instead of filling 100% width (which makes it too tall), 
+                        // fill 90% (0.9f) or 85% (0.85f). Tweak this number until it fits perfectly.
+                        .fillMaxWidth(0.4f) 
+                        // Remove hardcoded height when using FillWidth, let aspect ratio handle it.
+                        // .height(100.dp) 
+                        // Add a little breathing room above and below so it doesn't touch the status card
+                        .padding(vertical = 24.dp), 
+                    // Keep this, it's what makes it big
+                    contentScale = ContentScale.FillWidth 
                 )
+                // -----------------------------------------
 
-                Spacer(modifier = Modifier.height(48.dp))
+                Spacer(modifier = Modifier.height(150.dp))
                 StatusCard(status = status)
 
                 if (showTroubleshootingHint) {
@@ -543,9 +559,11 @@ fun InkBridgeDashboard(
 
                 Spacer(modifier = Modifier.height(48.dp))
 
-                ConnectButton("Connect via USB", Icons.Default.Usb) {
-                    onConnectRequested("USB", "", "")
-                }
+                GradientConnectButton(
+                    text = "Connect via USB", 
+                    icon = Icons.Default.Usb,
+                    onClick = { onConnectRequested("USB", "", "") }
+                )
 
                 // --- HIDE WIFI FOR V0.2 ---
                 /*
@@ -587,6 +605,60 @@ fun InkBridgeDashboard(
                 onConnectRequested("WIFI_MANUAL", ip, port)
             }
         )
+    }
+}
+
+@Composable
+fun GradientConnectButton(
+    text: String,
+    icon: ImageVector,
+    onClick: () -> Unit
+) {
+    // Define your Cyberpunk Gradient
+    val gradientBrush = Brush.radialGradient(
+        colors = listOf(
+            Color(0xFF02FAFF), // Cyan
+            Color(0xFF6801FF)  // Purple
+        ),
+        radius = 600f
+    )
+
+    Button(
+        onClick = onClick,
+        // Make the button container transparent so the gradient shows through
+        colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
+        contentPadding = PaddingValues(), // Remove default padding to fill the shape
+        shape = RoundedCornerShape(12.dp), // Modern rounded corners
+        modifier = Modifier
+            .width(280.dp)
+            .height(56.dp)
+    ) {
+        // This Box paints the gradient background
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(gradientBrush),
+            contentAlignment = Alignment.Center
+        ) {
+            // The Row holds your Icon and Text
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = Color.White // Text/Icon should be white for contrast
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = text,
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp
+                )
+            }
+        }
     }
 }
 

@@ -1,26 +1,35 @@
 # InkBridge
 
-**Turn your Android Stylus device into a professional Graphics Tablet for Linux.**
+**The bridge between your Android device and your Linux creative suite.**
 
-InkBridge is a low-latency, wired (USB) driver solution that maps raw Android S-Pen/Stylus data to a virtual Linux input device. It supports full pressure sensitivity, tilt, and tool switching, effectively replacing a dedicated Wacom Intuos/Cintiq tablet for digital art workflows in Krita, Blender, GIMP, and more.
+InkBridge transforms any Android device into a high-precision input surface for Linux. Whether you are using a professional S-Pen on a tablet, a "dumb" stylus on a phone, or just your fingertips, InkBridge maps your touch data directly to a virtual Linux digitizer. 
 
-![InkBridge UI Screenshot](docs/screenshot.png)
+Engineered for near-zero latency and professional-grade control, it bridges the gap between your mobile hardware and desktop powerhouses like **Krita, Blender, GIMP, and Inkscape.**
 
+### 🌐 Beyond the Cable
+While we currently offer a rock-solid **USB (AOA)** wired connection for maximum stability and speed, InkBridge is built with an extensible architecture. **Wireless support (Bluetooth & Wi-Fi)** is currently in development to bring tether-free creativity to your Linux desktop.
 
+#### Desktop UI
+![InkBridge-Desktop UI Screenshot](docs/screenshot.png)
+
+#### Android Tablet UI
+![Inkbridge-Android UI Screenshot](docs/android_screenshot.png)
 
 ## ✨ Key Features
 
+* **Universal Input:** Supports S-Pen (Pressure/Tilt), capacitive styluses, and multi-touch finger input.
 * **USB Wired Connection:** Uses the **Android Open Accessory (AOA)** protocol for near-zero latency input.
-* **Professional Input Support:**
+* **Professional-Grade Input Support:**
     * **Logarithmic Pressure Curve:** Custom-tuned math for natural, responsive strokes (4096 levels).
     * **True 3D Tilt:** Projects Android sensor data to standard Linux EV_ABS tilt axes (-90° to +90°).
     * **Reliable Eraser:** "Clean Handover" protocol ensures 100% reliable tool switching between Pen and Eraser during hover or active strokes.
-* **Virtual Driver:** Creates a system-level `uinput` device ("pen-emu") compatible with X11 and Wayland (libinput).
+* **Linux Native Virtual Driver:** Creates a system-level `uinput` device ("pen-emu") compatible with X11 and Wayland (libinput). Use your stylus as a mouse.
 * **Modern Desktop UI (Qt/QML):**
     * **Multi-Monitor Mapping:** Select exactly which screen the tablet maps to.
     * **Customizable Physics:** Adjust Pressure Sensitivity and Minimum Threshold (Deadzone).
     * **Rotation Correction:** Swap X/Y axes for landscape/portrait mismatches.
-    * **Theming:** Built-in Dark and Light modes.
+    * **Theming:** Built-in Dark and Light modes for both the desktop and Android apps.
+* **Zero Bloat:** Minimalistic UI and software implementation
 
 ## 🛠️ Architecture
 

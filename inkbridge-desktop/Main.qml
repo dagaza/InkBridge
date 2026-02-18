@@ -86,29 +86,40 @@ ApplicationWindow {
                 // 1. HEADER
                 Item {
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 50
-                    
-                    ColumnLayout {
+                    Layout.preferredHeight: 50 // Fixed height for the header bar
+
+                    RowLayout { // Changed to RowLayout (usually better for headers) or keep Column if you stack title under logo
                         anchors.fill: parent
-                        spacing: 4
-                        
-                        Label {
-                            text: "InkBridge"
-                            font.pixelSize: 32
-                            font.weight: Font.Bold
-                            font.letterSpacing: -0.5
-                            color: textCol
-                            Behavior on color { ColorAnimation { duration: animDuration } }
+                        anchors.leftMargin: 16 // Give it some breathing room from the edge
+                        anchors.rightMargin: 16
+                        spacing: 12
+
+                        Image {
+                            id: appLogo
+                            source: "qrc:/assets/inkbridge_wordmark.svg"
+
+                            // Layout Properties
+                            Layout.preferredHeight: 42
+                            Layout.alignment: Qt.AlignVCenter // Centers it vertically in the 50px header
+
+                            // Standard Image Properties
+                            fillMode: Image.PreserveAspectFit
+                            mipmap: true // Smooths edges when downscaling
+
+                            // SVG QUALITY FIX
+                            // Only set height. Width is auto-calculated by aspect ratio.
+                            sourceSize.height: Layout.preferredHeight * Screen.devicePixelRatio
                         }
-                        
-                        Label {
+
+                        // Use a "Spacer" if you want the logo on the left and settings on the right
+                        Item { Layout.fillWidth: true } 
+
+                        /* Label {
                             text: "Tablet & Stylus Driver App"
-                            font.pixelSize: 11
-                            font.weight: Font.Normal
-                            color: subTextCol
-                            opacity: 0.8
-                            Behavior on color { ColorAnimation { duration: animDuration } }
+                            visible: false 
+                            // ... (rest of your label code)
                         }
+                        */
                     }
                 }
 
