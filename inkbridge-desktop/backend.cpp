@@ -186,15 +186,26 @@ void Backend::disconnectDevice() {
 void Backend::setPressureSensitivity(int value) {
     if (m_pressureSensitivity != value) {
         m_pressureSensitivity = value;
-        // Logic to update translator would go here
-        emit settingsChanged(); // <--- FIX: This updates the text in QML
+        
+        // --- THE FIX: Update the translator ---
+        if (m_pressureTranslator) {
+            m_pressureTranslator->sensitivity = value;
+        }
+        
+        emit settingsChanged(); 
     }
 }
 
 void Backend::setMinPressure(int value) {
     if (m_minPressure != value) {
         m_minPressure = value;
-        emit settingsChanged(); // <--- FIX: This updates the text in QML
+        
+        // --- THE FIX: Update the translator ---
+        if (m_pressureTranslator) {
+            m_pressureTranslator->minPressure = value;
+        }
+        
+        emit settingsChanged();
     }
 }
 

@@ -683,6 +683,13 @@ ApplicationWindow {
                                         to: 100
                                         value: backend.pressureSensitivity
                                         onMoved: backend.setPressureSensitivity(value)
+
+                                        ToolTip {
+                                            visible: parent.hovered || parent.pressed
+                                            text: "Adjusts how quickly you reach max thickness. Higher = lighter touch needed."
+                                            delay: 500
+                                            timeout: 3000
+                                        }
                                         
                                         background: Rectangle {
                                             x: parent.leftPadding
@@ -757,11 +764,19 @@ ApplicationWindow {
                                     }
                                     
                                     Slider {
+                                        id: minPressureSlider
                                         Layout.fillWidth: true
                                         from: 0
                                         to: 100
                                         value: backend.minPressure
                                         onMoved: backend.setMinPressure(value)
+
+                                        ToolTip {
+                                            visible: parent.hovered || parent.pressed
+                                            text: "Sets a starting threshold. Prevents 'ghost' strokes from very light touches."
+                                            delay: 500
+                                            timeout: 3000
+                                        }
                                         
                                         background: Rectangle {
                                             x: parent.leftPadding

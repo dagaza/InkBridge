@@ -412,7 +412,7 @@ class MainActivity : ComponentActivity() {
                     
                     val textView = TextView(context).apply {
                         text = "InkBridge Active\n(Touch to Draw)"
-                        setTextColor(Color.DKGRAY) 
+                        setTextColor(Color.DKGRAY)
                         textSize = 20f
                         gravity = Gravity.CENTER
                         layoutParams = FrameLayout.LayoutParams(
@@ -420,6 +420,11 @@ class MainActivity : ComponentActivity() {
                             FrameLayout.LayoutParams.WRAP_CONTENT,
                             Gravity.CENTER
                         )
+                        // Make the label purely decorative — no touch, focus, or selection
+                        isClickable = false
+                        isLongClickable = false
+                        isFocusable = false
+                        setTextIsSelectable(false)
                     }
                     addView(textView)
 
