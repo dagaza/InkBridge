@@ -3,6 +3,9 @@ package com.inkbridge
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.PendingIntent
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -29,6 +32,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.Cable
 import androidx.compose.material.icons.filled.Usb
 import androidx.compose.material.icons.filled.Wifi
@@ -46,6 +50,7 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -63,16 +68,46 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var usbManager: UsbManager
     private val ACTION_USB_PERMISSION = "com.inkbridge.USB_PERMISSION"
-    
+
     // UI State
     private var isConnected by mutableStateOf(false)
     private var statusMessage by mutableStateOf("Ready to Connect")
-
     private var pendingAccessory: UsbAccessory? = null
     private var showTroubleshootingHint by mutableStateOf(false)
-    
+
     // Internal State
     private var wakeLock: PowerManager.WakeLock? = null
+
+    // --- Bluetooth state ---
+    private var bluetoothAdapter: BluetoothAdapter? = null
+    private var showBluetoothPicker by mutableStateOf(false)
+    private var pairedBtDevices by mutableStateOf<List<BluetoothDevice>>(emptyList())
+    private var nearbyBtDevices by mutableStateOf<List<BluetoothDevice>>(emptyList())
+    private var isBtScanning by mutableStateOf(false)
+
+    // Receives ACTION_FOUND broadcasts during a discovery scan.
+    private val bluetoothScanReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            when (intent.action) {
+                BluetoothDevice.ACTION_FOUND -> {
+                    val device: BluetoothDevice? =
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
+                            intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
+                        else
+                            @Suppress("DEPRECATION")
+                            intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+                    device?.let { d ->
+                        if (nearbyBtDevices.none { it.address == d.address }) {
+                            nearbyBtDevices = nearbyBtDevices + d
+                        }
+                    }
+                }
+                BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> {
+                    isBtScanning = false
+                }
+            }
+        }
+    }
 
     private val usbReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -84,17 +119,14 @@ class MainActivity : ComponentActivity() {
                         @Suppress("DEPRECATION")
                         intent.getParcelableExtra(UsbManager.EXTRA_ACCESSORY) as? UsbAccessory
                     }
-
                     val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
-
                     if (granted && accessory != null) {
                         showTroubleshootingHint = false
                         val rootView = window.decorView.findViewById<View>(android.R.id.content)
-                        // Corrected: Launch coroutine to call the suspend function
                         lifecycleScope.launch {
                             runConnection(accessory, rootView)
                         }
-                    } else { // This else now correctly follows the 'if'
+                    } else {
                         statusMessage = "Permission Denied"
                         showTroubleshootingHint = true
                     }
@@ -107,12 +139,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // Permission Launcher for Android 13+ Wi-Fi scanning
+    // Permission launcher for Android 13+ Wi-Fi scanning
     private val requestWifiPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted: Boolean ->
         if (isGranted) {
-            // Permission granted! Start the scan.
             val rootView = window.decorView.findViewById<View>(android.R.id.content)
             runWifiDiscovery(rootView)
         } else {
@@ -120,65 +151,21 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onWindowFocusChanged(hasFocus: Boolean) {
-        super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) {
-            // Re-apply immersive mode whenever the window regains focus
-            // (e.g., after the user dismisses a permission dialog)
-            hideSystemUI()
+    // Permission launcher for Android 12+ Bluetooth
+    private val requestBluetoothPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        val allGranted = results.values.all { it }
+        if (allGranted) {
+            openBluetoothPicker()
+        } else {
+            statusMessage = "Bluetooth permission denied."
         }
     }
 
-    // 3. NEW HELPER FUNCTION
-    private fun triggerPendingConnection() {
-        val accessory = pendingAccessory ?: return
-        val rootView = window.decorView.findViewById<View>(android.R.id.content)
-        
-        // Clear it so we don't loop
-        pendingAccessory = null 
-        
-        // Use the Retry Logic we built earlier
-        connectWithRetry(accessory, rootView)
-    }
-
-    private fun connectWithRetry(accessory: UsbAccessory, view: View) {
-        lifecycleScope.launch {
-            statusMessage = "Verifying..."
-            var connected = false
-            
-            // Try for 3 seconds (6 attempts)
-            withContext(Dispatchers.IO) {
-                for (i in 0..5) {
-                    // Try to connect even if the OS says "No Permission" (It might be lying/lagging)
-                    connected = UsbStreamService.connect(usbManager, accessory)
-                    if (connected) break
-                    
-                    // Wait 500ms before next try
-                    kotlinx.coroutines.delay(500)
-                }
-            }
-
-            if (connected) {
-                isConnected = true
-                statusMessage = "Connected via USB"
-            } else {
-                statusMessage = "Permission Denied"
-            }
-        }
-    }
-
-    private fun exitApp() {
-    // 1. Clean up hardware and network
-    disconnectAll()
-    
-    // 2. Release wake lock if held
-    if (wakeLock?.isHeld == true) {
-        wakeLock?.release()
-    }
-    
-    // 3. Close all activities and kill the process
-    finishAffinity() 
-}
+    // ==========================================
+    // LIFECYCLE
+    // ==========================================
 
     @SuppressLint("UnspecifiedRegisterReceiverFlag")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -192,37 +179,47 @@ class MainActivity : ComponentActivity() {
 
         usbManager = getSystemService(Context.USB_SERVICE) as UsbManager
 
+        // Register USB receiver
         val filter = IntentFilter(ACTION_USB_PERMISSION)
         filter.addAction(UsbManager.ACTION_USB_ACCESSORY_DETACHED)
-        
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(usbReceiver, filter, Context.RECEIVER_EXPORTED)
         } else {
             registerReceiver(usbReceiver, filter)
         }
 
+        // Register Bluetooth scan receiver
+        val btFilter = IntentFilter().apply {
+            addAction(BluetoothDevice.ACTION_FOUND)
+            addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED)
+        }
+        registerReceiver(bluetoothScanReceiver, btFilter)
+
+        // Initialise Bluetooth adapter
+        bluetoothAdapter = (getSystemService(BLUETOOTH_SERVICE) as BluetoothManager).adapter
+
+        // Apply saved theme preference
         val prefs = getSharedPreferences("settings", Context.MODE_PRIVATE)
         val savedMode = prefs.getInt("night_mode", AppCompatDelegate.MODE_NIGHT_YES)
         AppCompatDelegate.setDefaultNightMode(savedMode)
 
         setContent {
-            // Read the current mode so the theme recomposes when the toggle fires
             val nightMode = AppCompatDelegate.getDefaultNightMode()
             val isDark = nightMode != AppCompatDelegate.MODE_NIGHT_NO
 
             val colorScheme = if (isDark) {
                 darkColorScheme(
-                    primary     = androidx.compose.ui.graphics.Color(0xFFBB86FC),
-                    secondary   = androidx.compose.ui.graphics.Color(0xFF03DAC5),
-                    background  = androidx.compose.ui.graphics.Color(0xFF121212),
-                    surface     = androidx.compose.ui.graphics.Color(0xFF1E1E1E)
+                    primary     = Color(0xFFBB86FC),
+                    secondary   = Color(0xFF03DAC5),
+                    background  = Color(0xFF121212),
+                    surface     = Color(0xFF1E1E1E)
                 )
             } else {
                 lightColorScheme(
-                    primary     = androidx.compose.ui.graphics.Color(0xFF6200EE),
-                    secondary   = androidx.compose.ui.graphics.Color(0xFF03DAC5),
-                    background  = androidx.compose.ui.graphics.Color(0xFFF5F5F5),
-                    surface     = androidx.compose.ui.graphics.Color(0xFFFFFFFF)
+                    primary     = Color(0xFF6200EE),
+                    secondary   = Color(0xFF03DAC5),
+                    background  = Color(0xFFF5F5F5),
+                    surface     = Color(0xFFFFFFFF)
                 )
             }
 
@@ -235,10 +232,10 @@ class MainActivity : ComponentActivity() {
                         if (wakeLock?.isHeld == true) wakeLock?.release()
                     }
                 }
+
                 if (isConnected) {
                     DrawingPad(onDisconnect = { disconnectAll() })
                 } else {
-                    // If user presses back on the home screen, exit cleanly
                     BackHandler { exitApp() }
                     val rootView = LocalView.current
                     InkBridgeDashboard(
@@ -246,13 +243,6 @@ class MainActivity : ComponentActivity() {
                         onConnectRequested = { method, ip, port ->
                             if (method == "USB") {
                                 findAndConnectUsb(rootView)
-                            /* Disabled for V0.2
-                        else if (method == "WIFI_DISCOVER") {
-                            attemptWifiDiscovery(rootView)
-                        } else {
-                            attemptWifiConnection(ip, port, rootView)
-                        }
-                        */
                             }
                         }
                     )
@@ -263,9 +253,21 @@ class MainActivity : ComponentActivity() {
         handleIntent(intent)
     }
 
+    override fun onDestroy() {
+        super.onDestroy()
+        try { unregisterReceiver(bluetoothScanReceiver) } catch (_: Exception) {}
+        try { unregisterReceiver(usbReceiver) } catch (_: Exception) {}
+        bluetoothAdapter?.let { BluetoothStreamService.cancelDiscovery(it) }
+    }
+
     override fun onResume() {
         super.onResume()
         if (isConnected) hideSystemUI()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) hideSystemUI()
     }
 
     override fun onNewIntent(intent: Intent?) {
@@ -273,6 +275,10 @@ class MainActivity : ComponentActivity() {
         setIntent(intent)
         handleIntent(intent)
     }
+
+    // ==========================================
+    // INTENT HANDLING
+    // ==========================================
 
     private fun handleIntent(intent: Intent?) {
         if (intent?.action == UsbManager.ACTION_USB_ACCESSORY_ATTACHED) {
@@ -282,7 +288,6 @@ class MainActivity : ComponentActivity() {
                 @Suppress("DEPRECATION")
                 intent.getParcelableExtra(UsbManager.EXTRA_ACCESSORY) as? UsbAccessory
             }
-
             if (accessory != null) {
                 lifecycleScope.launch {
                     statusMessage = "Auto-Connecting..."
@@ -294,20 +299,66 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // ==========================================
+    // HELPERS
+    // ==========================================
+
+    private fun exitApp() {
+        disconnectAll()
+        if (wakeLock?.isHeld == true) wakeLock?.release()
+        finishAffinity()
+    }
+
+    private fun triggerPendingConnection() {
+        val accessory = pendingAccessory ?: return
+        val rootView = window.decorView.findViewById<View>(android.R.id.content)
+        pendingAccessory = null
+        connectWithRetry(accessory, rootView)
+    }
+
+    private fun connectWithRetry(accessory: UsbAccessory, view: View) {
+        lifecycleScope.launch {
+            statusMessage = "Verifying..."
+            var connected = false
+            withContext(Dispatchers.IO) {
+                for (i in 0..5) {
+                    connected = UsbStreamService.connect(usbManager, accessory)
+                    if (connected) break
+                    kotlinx.coroutines.delay(500)
+                }
+            }
+            if (connected) {
+                isConnected = true
+                statusMessage = "Connected via USB"
+            } else {
+                statusMessage = "Permission Denied"
+            }
+        }
+    }
+
     private fun disconnectAll() {
         lifecycleScope.launch(Dispatchers.IO) {
-            // 1. Heavy lifting: Close hardware and network handles (IO Thread)
             UsbStreamService.closeStream()
             NetworkStreamService.closeStream()
-
-            // 2. UI Updates: Switch back to the Main thread to update the screen
+            BluetoothStreamService.closeStream()
             withContext(Dispatchers.Main) {
                 isConnected = false
                 statusMessage = "Ready to Connect"
-                // Also hide the hint if it was visible
                 showTroubleshootingHint = false
             }
         }
+    }
+
+    private fun hideSystemUI() {
+        @Suppress("DEPRECATION")
+        window.decorView.systemUiVisibility = (
+            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
+            View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+            View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
+            View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+            View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+            View.SYSTEM_UI_FLAG_FULLSCREEN
+        )
     }
 
     // ==========================================
@@ -315,20 +366,15 @@ class MainActivity : ComponentActivity() {
     // ==========================================
 
     private fun findAndConnectUsb(view: View) {
-        // Reset hint state whenever a manual attempt starts
-        showTroubleshootingHint = false 
-        
+        showTroubleshootingHint = false
         lifecycleScope.launch {
             val accessories = usbManager.accessoryList
             if (accessories.isNullOrEmpty()) {
                 statusMessage = "No USB Device Found."
-                withContext(Dispatchers.IO) {
-                UsbStreamService.closeStream()
-                }
+                withContext(Dispatchers.IO) { UsbStreamService.closeStream() }
                 return@launch
             }
             val accessory = accessories[0]
-
             if (!usbManager.hasPermission(accessory)) {
                 statusMessage = "Requesting Permission..."
                 val intent = Intent(ACTION_USB_PERMISSION).apply { setPackage(packageName) }
@@ -343,17 +389,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private suspend fun runConnection(accessory: UsbAccessory, view: View) {
-        // Run blocking connection on IO thread
         withContext(Dispatchers.IO) {
-            // 1. Cleanup old
             withContext(Dispatchers.Main) { statusMessage = "Resetting..." }
             UsbStreamService.closeStream()
-            
-            // 2. Open new
             withContext(Dispatchers.Main) { statusMessage = "Opening Connection..." }
             val success = UsbStreamService.connect(usbManager, accessory)
-            
-            // 3. Update UI
             withContext(Dispatchers.Main) {
                 if (success) {
                     isConnected = true
@@ -366,15 +406,12 @@ class MainActivity : ComponentActivity() {
     }
 
     // ==========================================
-    // LOGIC: WIFI CONNECTION (Unchanged)
+    // LOGIC: WIFI CONNECTION
     // ==========================================
 
-    // 1. THE GATEKEEPER: Checks permission first
     private fun attemptWifiDiscovery(view: View) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            // On Android 13+, we must ask for permission explicitly
             val permission = Manifest.permission.NEARBY_WIFI_DEVICES
-            
             if (ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED) {
                 runWifiDiscovery(view)
             } else {
@@ -382,12 +419,10 @@ class MainActivity : ComponentActivity() {
                 requestWifiPermissionLauncher.launch(permission)
             }
         } else {
-            // Older Android versions don't need runtime permission for this
             runWifiDiscovery(view)
         }
     }
 
-    // 2. THE WORKER: Performs the actual scan (Renamed from old attemptWifiDiscovery)
     private fun runWifiDiscovery(view: View) {
         statusMessage = "Scanning for PC..."
         lifecycleScope.launch(Dispatchers.IO) {
@@ -408,7 +443,6 @@ class MainActivity : ComponentActivity() {
     private fun attemptWifiConnection(ip: String, port: String, view: View) {
         if (ip.isBlank()) return
         val portNum = port.toIntOrNull() ?: 4545
-        
         lifecycleScope.launch(Dispatchers.IO) {
             try {
                 NetworkStreamService.streamTouchInputToWifi(ip, portNum, view)
@@ -425,6 +459,69 @@ class MainActivity : ComponentActivity() {
     }
 
     // ==========================================
+    // LOGIC: BLUETOOTH CONNECTION
+    // ==========================================
+
+    private fun findAndConnectBluetooth() {
+        val adapter = bluetoothAdapter
+        if (adapter == null || !adapter.isEnabled) {
+            statusMessage = "Bluetooth is not enabled."
+            return
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val needed = listOf(
+                Manifest.permission.BLUETOOTH_CONNECT,
+                Manifest.permission.BLUETOOTH_SCAN
+            ).filter {
+                ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+            }
+            if (needed.isNotEmpty()) {
+                requestBluetoothPermissionLauncher.launch(needed.toTypedArray())
+                return
+            }
+        }
+        openBluetoothPicker()
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun openBluetoothPicker() {
+        val adapter = bluetoothAdapter ?: return
+        pairedBtDevices = BluetoothStreamService.getPairedDevices(adapter)
+        nearbyBtDevices = emptyList()
+        isBtScanning = false
+        showBluetoothPicker = true
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun startBluetoothScan() {
+        val adapter = bluetoothAdapter ?: return
+        nearbyBtDevices = emptyList()
+        isBtScanning = true
+        BluetoothStreamService.startDiscovery(adapter)
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun connectBluetooth(device: BluetoothDevice, view: View) {
+        showBluetoothPicker = false
+        bluetoothAdapter?.let { BluetoothStreamService.cancelDiscovery(it) }
+        isBtScanning = false
+        lifecycleScope.launch(Dispatchers.IO) {
+            withContext(Dispatchers.Main) { statusMessage = "Connecting via Bluetooth..." }
+            BluetoothStreamService.closeStream()
+            val success = BluetoothStreamService.connect(device)
+            withContext(Dispatchers.Main) {
+                if (success) {
+                    BluetoothStreamService.updateView(view)
+                    isConnected = true
+                    statusMessage = "Connected via Bluetooth"
+                } else {
+                    statusMessage = "Bluetooth connection failed. Is the desktop app running?"
+                }
+            }
+        }
+    }
+
+    // ==========================================
     // UI COMPONENTS
     // ==========================================
 
@@ -435,7 +532,6 @@ class MainActivity : ComponentActivity() {
             factory = { context: Context ->
                 FrameLayout(context).apply {
                     setBackgroundColor(android.graphics.Color.BLACK)
-                    
                     val textView = TextView(context).apply {
                         text = "InkBridge Active\n(Touch to Draw)"
                         setTextColor(android.graphics.Color.DKGRAY)
@@ -446,20 +542,18 @@ class MainActivity : ComponentActivity() {
                             FrameLayout.LayoutParams.WRAP_CONTENT,
                             Gravity.CENTER
                         )
-                        // Make the label purely decorative — no touch, focus, or selection
                         isClickable = false
                         isLongClickable = false
                         isFocusable = false
                         setTextIsSelectable(false)
                     }
                     addView(textView)
-
                     isFocusable = true
                     isFocusableInTouchMode = true
                     keepScreenOn = true
-                    
                     UsbStreamService.updateView(this)
                     NetworkStreamService.updateView(this)
+                    BluetoothStreamService.updateView(this)
                 }
             },
             update = { view: View ->
@@ -471,202 +565,226 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-fun InkBridgeDashboard(
-    status: String,
-    onConnectRequested: (method: String, ip: String, port: String) -> Unit
-) {
-    var showWifiDialog by remember { mutableStateOf(false) }
-    
-    // Read saved preference, default to dark
-    val context = LocalContext.current
-    val prefs = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
-    var isDarkTheme by remember {
-        mutableStateOf(
-            prefs.getInt("night_mode", AppCompatDelegate.MODE_NIGHT_YES) == AppCompatDelegate.MODE_NIGHT_YES
-        )
-    }
+    fun InkBridgeDashboard(
+        status: String,
+        onConnectRequested: (method: String, ip: String, port: String) -> Unit
+    ) {
+        var showWifiDialog by remember { mutableStateOf(false) }
 
-    Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-        Box(modifier = Modifier.fillMaxSize()) {
+        val context = LocalContext.current
+        val prefs = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+        var isDarkTheme by remember {
+            mutableStateOf(
+                prefs.getInt("night_mode", AppCompatDelegate.MODE_NIGHT_YES) == AppCompatDelegate.MODE_NIGHT_YES
+            )
+        }
 
-            // ---- THEME TOGGLE (top-right corner) ----
-            IconButton(
-                onClick = {
-                    val newMode = if (isDarkTheme)
-                        AppCompatDelegate.MODE_NIGHT_NO   // was dark, switch to light
-                    else
-                        AppCompatDelegate.MODE_NIGHT_YES  // was light, switch to dark
-                    isDarkTheme = !isDarkTheme
-                    AppCompatDelegate.setDefaultNightMode(newMode)
-                    prefs.edit().putInt("night_mode", newMode).apply()
-                    (context as? Activity)?.recreate()
-                },
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(16.dp)
-            ) {
-                Icon(
-                    imageVector = if (isDarkTheme) Icons.Default.LightMode else Icons.Default.DarkMode,
-                    contentDescription = if (isDarkTheme) "Switch to light mode" else "Switch to dark mode",
-                    tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
-                )
-            }
-            // -----------------------------------------
+        Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+            Box(modifier = Modifier.fillMaxSize()) {
 
-            Column(
-                modifier = Modifier.fillMaxSize().padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
-            ) {
-                // --- CHANGED: Replaced Text with Image ---
-                Image(
-                    painter = painterResource(id = R.drawable.ic_wordmark),
-                    contentDescription = "InkBridge Logo",
+                // ---- THEME TOGGLE (top-right corner) ----
+                IconButton(
+                    onClick = {
+                        val newMode = if (isDarkTheme)
+                            AppCompatDelegate.MODE_NIGHT_NO
+                        else
+                            AppCompatDelegate.MODE_NIGHT_YES
+                        isDarkTheme = !isDarkTheme
+                        AppCompatDelegate.setDefaultNightMode(newMode)
+                        prefs.edit().putInt("night_mode", newMode).apply()
+                        (context as? Activity)?.recreate()
+                    },
                     modifier = Modifier
-                        // --- THE FIX ---
-                        // Instead of filling 100% width (which makes it too tall), 
-                        // fill 90% (0.9f) or 85% (0.85f). Tweak this number until it fits perfectly.
-                        .fillMaxWidth(0.4f) 
-                        // Remove hardcoded height when using FillWidth, let aspect ratio handle it.
-                        // .height(100.dp) 
-                        // Add a little breathing room above and below so it doesn't touch the status card
-                        .padding(vertical = 24.dp), 
-                    // Keep this, it's what makes it big
-                    contentScale = ContentScale.FillWidth 
-                )
+                        .align(Alignment.TopEnd)
+                        .padding(16.dp)
+                ) {
+                    Icon(
+                        imageVector = if (isDarkTheme) Icons.Default.LightMode else Icons.Default.DarkMode,
+                        contentDescription = if (isDarkTheme) "Switch to light mode" else "Switch to dark mode",
+                        tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+                    )
+                }
                 // -----------------------------------------
 
-                Spacer(modifier = Modifier.height(150.dp))
-                StatusCard(status = status)
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Top
+                ) {
+                    Spacer(modifier = Modifier.weight(2f))
 
-                if (showTroubleshootingHint) {
+                    // Logo / wordmark
+                    Image(
+                        painter = painterResource(id = R.drawable.ic_wordmark),
+                        contentDescription = "InkBridge Logo",
+                        modifier = Modifier
+                            .fillMaxWidth(0.4f)
+                            .padding(vertical = 24.dp),
+                        contentScale = ContentScale.FillWidth
+                    )
+
+                    Spacer(modifier = Modifier.height(150.dp))
+                    StatusCard(status = status)
+
+                    if (showTroubleshootingHint) {
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor = Color(0xFF332200)
+                            ),
+                            modifier = Modifier.padding(horizontal = 16.dp)
+                        ) {
+                            Text(
+                                text = "First time connecting? If you just checked 'Always allow', please press Connect again.",
+                                color = Color(0xFFFFCC00),
+                                modifier = Modifier.padding(12.dp),
+                                style = MaterialTheme.typography.bodySmall,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(48.dp))
+
+                    // USB button — gradient style
+                    GradientConnectButton(
+                        text = "Connect via USB",
+                        icon = Icons.Default.Usb,
+                        onClick = { onConnectRequested("USB", "", "") }
+                    )
+
                     Spacer(modifier = Modifier.height(16.dp))
-                    Card(
-                        colors = CardDefaults.cardColors(
-                            containerColor = androidx.compose.ui.graphics.Color(0xFF332200)
+
+                    // Bluetooth button — same gradient style
+                    GradientConnectButton(
+                        text = "Connect via Bluetooth",
+                        icon = Icons.Default.Bluetooth,
+                        onClick = { findAndConnectBluetooth() }
+                    )
+
+                    // --- HIDE WIFI FOR V0.2 ---
+                    /*
+                    Spacer(modifier = Modifier.height(16.dp))
+                    GradientConnectButton("Auto-Discover WiFi", Icons.Default.Wifi) {
+                        onConnectRequested("WIFI_DISCOVER", "", "")
+                    }
+                    Spacer(modifier = Modifier.height(16.dp))
+                    TextButton(onClick = { showWifiDialog = true }) {
+                        Text(text = "Manual IP Input", color = Color.Gray)
+                    }
+                    */
+                    // --------------------------
+
+                    Spacer(modifier = Modifier.weight(1f))
+
+                    OutlinedButton(
+                        onClick = { exitApp() },
+                        modifier = Modifier.widthIn(min = 200.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = Color(0xFFCF6679)
                         ),
-                        modifier = Modifier.padding(horizontal = 16.dp)
-                    ) {
-                        Text(
-                            text = "First time connecting? If you just checked 'Always allow', please press Connect again.",
-                            color = androidx.compose.ui.graphics.Color(0xFFFFCC00),
-                            modifier = Modifier.padding(12.dp),
-                            style = MaterialTheme.typography.bodySmall,
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            Color(0xFFCF6679).copy(alpha = 0.5f)
                         )
+                    ) {
+                        Text("Exit Application")
                     }
                 }
-
-                Spacer(modifier = Modifier.height(48.dp))
-
-                GradientConnectButton(
-                    text = "Connect via USB", 
-                    icon = Icons.Default.Usb,
-                    onClick = { onConnectRequested("USB", "", "") }
-                )
-
-                // --- HIDE WIFI FOR V0.2 ---
-                /*
-                Spacer(modifier = Modifier.height(16.dp))
-                ConnectButton("Auto-Discover WiFi", Icons.Default.Wifi) {
-                    onConnectRequested("WIFI_DISCOVER", "", "")
-                }
-                Spacer(modifier = Modifier.height(16.dp))
-                TextButton(onClick = { showWifiDialog = true }) {
-                    Text(text = "Manual IP Input", color = androidx.compose.ui.graphics.Color.Gray)
-                }
-                */
-                // --------------------------
-
-                Spacer(modifier = Modifier.weight(1f))
-
-                OutlinedButton(
-                    onClick = { exitApp() },
-                    modifier = Modifier.widthIn(min = 200.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        contentColor = androidx.compose.ui.graphics.Color(0xFFCF6679)
-                    ),
-                    border = androidx.compose.foundation.BorderStroke(
-                        1.dp,
-                        androidx.compose.ui.graphics.Color(0xFFCF6679).copy(alpha = 0.5f)
-                    )
-                ) {
-                    Text("Exit Application")
-                }
             }
+        }
+
+        // Bluetooth picker dialog — outside the Surface but inside the composable
+        if (showBluetoothPicker) {
+            val rootView = LocalView.current
+            BluetoothDevicePickerDialog(
+                pairedDevices    = pairedBtDevices,
+                nearbyDevices    = nearbyBtDevices,
+                isScanning       = isBtScanning,
+                onScanRequested  = { startBluetoothScan() },
+                onDeviceSelected = { device -> connectBluetooth(device, rootView) },
+                onDismiss        = {
+                    showBluetoothPicker = false
+                    bluetoothAdapter?.let { BluetoothStreamService.cancelDiscovery(it) }
+                    isBtScanning = false
+                }
+            )
+        }
+
+        if (showWifiDialog) {
+            WifiConnectDialog(
+                onDismiss = { showWifiDialog = false },
+                onConnect = { ip, port ->
+                    showWifiDialog = false
+                    onConnectRequested("WIFI_MANUAL", ip, port)
+                }
+            )
         }
     }
 
-    if (showWifiDialog) {
-        WifiConnectDialog(
-            onDismiss = { showWifiDialog = false },
-            onConnect = { ip, port ->
-                showWifiDialog = false
-                onConnectRequested("WIFI_MANUAL", ip, port)
-            }
-        )
-    }
-}
-
-@Composable
-fun GradientConnectButton(
-    text: String,
-    icon: ImageVector,
-    onClick: () -> Unit
-) {
-    // Define your Cyberpunk Gradient
-    val gradientBrush = Brush.radialGradient(
-        colors = listOf(
-            Color(0xFF02FAFF), // Cyan
-            Color(0xFF6801FF)  // Purple
-        ),
-        radius = 600f
-    )
-
-    Button(
-        onClick = onClick,
-        // Make the button container transparent so the gradient shows through
-        colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
-        contentPadding = PaddingValues(), // Remove default padding to fill the shape
-        shape = RoundedCornerShape(12.dp), // Modern rounded corners
-        modifier = Modifier
-            .width(280.dp)
-            .height(56.dp)
+    @Composable
+    fun GradientConnectButton(
+        text: String,
+        icon: ImageVector,
+        onClick: () -> Unit
     ) {
-        // This Box paints the gradient background
-        Box(
+        val gradientBrush = Brush.radialGradient(
+            colors = listOf(
+                Color(0xFF02FAFF), // Cyan
+                Color(0xFF6801FF)  // Purple
+            ),
+            radius = 600f
+        )
+
+        Button(
+            onClick = onClick,
+            colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
+            contentPadding = PaddingValues(),
+            shape = RoundedCornerShape(12.dp),
             modifier = Modifier
-                .fillMaxSize()
-                .background(gradientBrush),
-            contentAlignment = Alignment.Center
+                .width(280.dp)
+                .height(56.dp)
         ) {
-            // The Row holds your Icon and Text
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(gradientBrush),
+                contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = null,
-                    tint = Color.White // Text/Icon should be white for contrast
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = text,
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 16.sp
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = Color.White
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = text,
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp
+                    )
+                }
             }
         }
     }
-}
 
     @Composable
     fun StatusCard(status: String) {
-        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant), shape = RoundedCornerShape(16.dp)) {
-            Row(modifier = Modifier.padding(32.dp), verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.Cable, null, tint = androidx.compose.ui.graphics.Color.Gray, modifier = Modifier.size(40.dp))
+        Card(
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Row(
+                modifier = Modifier.padding(32.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(Icons.Default.Cable, null, tint = Color.Gray, modifier = Modifier.size(40.dp))
                 Spacer(modifier = Modifier.width(16.dp))
                 Column {
                     Text("Status", style = MaterialTheme.typography.labelMedium)
@@ -678,7 +796,11 @@ fun GradientConnectButton(
 
     @Composable
     fun ConnectButton(text: String, icon: ImageVector, onClick: () -> Unit) {
-        Button(onClick = onClick, modifier = Modifier.widthIn(min = 250.dp).height(60.dp), shape = RoundedCornerShape(12.dp)) {
+        Button(
+            onClick = onClick,
+            modifier = Modifier.widthIn(min = 250.dp).height(60.dp),
+            shape = RoundedCornerShape(12.dp)
+        ) {
             Icon(icon, null, modifier = Modifier.size(24.dp))
             Spacer(modifier = Modifier.width(12.dp))
             Text(text, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
@@ -694,11 +816,24 @@ fun GradientConnectButton(
                 Column(modifier = Modifier.padding(24.dp)) {
                     Text("Manual WiFi", style = MaterialTheme.typography.titleLarge)
                     Spacer(modifier = Modifier.height(16.dp))
-                    OutlinedTextField(value = ip, onValueChange = { ip = it }, label = { Text("Host IP") }, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(
+                        value = ip,
+                        onValueChange = { ip = it },
+                        label = { Text("Host IP") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
                     Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(value = port, onValueChange = { port = it }, label = { Text("Port") }, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(
+                        value = port,
+                        onValueChange = { port = it },
+                        label = { Text("Port") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
                     Spacer(modifier = Modifier.height(24.dp))
-                    Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        horizontalArrangement = Arrangement.End,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
                         TextButton(onClick = onDismiss) { Text("Cancel") }
                         Button(onClick = { onConnect(ip, port) }) { Text("Connect") }
                     }
@@ -712,23 +847,12 @@ fun GradientConnectButton(
         val keyCode = event?.keyCode ?: return super.dispatchKeyEvent(event)
         if (keyCode == 285 || keyCode == 284 || keyCode == 286 ||
             keyCode == KeyEvent.KEYCODE_CAMERA || keyCode == KeyEvent.KEYCODE_FOCUS) {
-            return true 
+            return true
         }
         return super.dispatchKeyEvent(event)
     }
 
-    override fun dispatchGenericMotionEvent(ev: MotionEvent?): Boolean { return super.dispatchGenericMotionEvent(ev) }
-
-        private fun hideSystemUI() {
-        // Universal Legacy implementation (Works on API 24+ without compileSdk 30 requirements)
-        @Suppress("DEPRECATION")
-        window.decorView.systemUiVisibility = (
-                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
-                View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
-                View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
-                View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
-                View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
-                View.SYSTEM_UI_FLAG_FULLSCREEN
-        )
+    override fun dispatchGenericMotionEvent(ev: MotionEvent?): Boolean {
+        return super.dispatchGenericMotionEvent(ev)
     }
 }

@@ -18,18 +18,18 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # 2. Dependencies (Qt Quick + LibUSB + Network)
 # -----------------------------------------------------------------------------
 # UPDATED: Added 'Network' component to both Qt6 and Qt5 blocks
-find_package(Qt6 COMPONENTS Quick Qml Core Gui Svg Widgets Network QUIET)
+find_package(Qt6 COMPONENTS Quick Qml Core Gui Svg Widgets Network Bluetooth QUIET)
 
 if(Qt6_FOUND)
     message(STATUS "Building with Qt 6 (${Qt6_VERSION})")
     # UPDATED: Added Qt6::Network
-    set(QT_LIBS Qt6::Quick Qt6::Qml Qt6::Core Qt6::Gui Qt6::Svg Qt6::Widgets Qt6::Network)
+    set(QT_LIBS Qt6::Quick Qt6::Qml Qt6::Core Qt6::Gui Qt6::Svg Qt6::Widgets Qt6::Network Qt6::Bluetooth)
 else()
     message(STATUS "Qt 6 not found, falling back to Qt 5...")
     # UPDATED: Added Network component
-    find_package(Qt5 COMPONENTS Quick Qml Core Gui Svg Widgets Network REQUIRED)
+    find_package(Qt5 COMPONENTS Quick Qml Core Gui Svg Widgets Network Bluetooth REQUIRED)
     # UPDATED: Added Qt5::Network
-    set(QT_LIBS Qt5::Quick Qt5::Qml Qt5::Core Qt5::Gui Qt5::Svg Qt5::Widgets Qt5::Network)
+    set(QT_LIBS Qt5::Quick Qt5::Qml Qt5::Core Qt5::Gui Qt5::Svg Qt5::Widgets Qt5::Network Qt5::Bluetooth)
 endif()
 
 find_package(PkgConfig REQUIRED)
@@ -49,6 +49,8 @@ set(PROJECT_SOURCES
     # NEW: Networking (Phase 6)
     wifiserver.cpp
     wifiserver.h
+    bluetoothserver.cpp
+    bluetoothserver.h
     protocol.h
 
     # Logic (Preserved from Phase 3/4)
@@ -131,3 +133,17 @@ add_custom_command(TARGET InkBridge POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
     ${CMAKE_CURRENT_SOURCE_DIR}/Main.qml
     $<TARGET_FILE_DIR:InkBridge>)
+
+
+#    =============================================================================
+# LINUX SYSTEM & Bluetooth NOTE
+# =============================================================================
+# Qt Bluetooth on Linux uses BlueZ under the hood. Make sure it's installed:
+#
+#   sudo apt install libbluetooth-dev bluetooth bluez
+#
+# The desktop machine's Bluetooth adapter must also be:
+#   1. Enabled:       sudo systemctl start bluetooth
+#   2. Powered on:    bluetoothctl power on
+#   3. Paired with the Android device before first use
+#      (pairing only needs to happen once)

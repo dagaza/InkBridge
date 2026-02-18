@@ -6,46 +6,44 @@ import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothSocket
 import android.util.Log
 import android.view.View
+import java.io.BufferedOutputStream
+import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.OutputStream
 import java.util.UUID
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 
-/**
- * BluetoothStreamService
- *
- * Mirrors UsbStreamService exactly: singleton object, queue-backed write loop,
- * blocking connect() designed to be called from Dispatchers.IO, and a
- * heartbeat to keep the connection alive during idle periods.
- *
- * Uses Classic Bluetooth SPP (RFCOMM) over the well-known SPP UUID.
- * This gives a reliable, low-latency serial stream — the right choice for
- * continuous stylus event data. BLE's MTU cap and connection-interval
- * constraints make it unsuitable for this use case.
- *
- * The Android device acts as the CLIENT. The desktop companion app must
- * open an RFCOMM server socket listening on the same SPP UUID before
- * the user attempts to connect.
- */
 object BluetoothStreamService {
 
     private const val TAG = "InkBridgeBtService"
 
-    // Standard SPP UUID — recognised by every Bluetooth stack.
-    // The desktop companion must advertise this same UUID.
+    private const val DEBUG = false
+
     private val SPP_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
 
-    // Heartbeat size matches UsbStreamService so the desktop parser
-    // can treat both transports identically.
-    private const val HEARTBEAT_PACKET_SIZE = 22
+    private const val PACKET_SIZE = 22
 
-    // How long to wait for the RFCOMM connection to be established.
-    private const val CONNECT_TIMEOUT_MS = 8000L
+    // Heartbeat — all 127s, same as UsbStreamService
+    private val HEARTBEAT = ByteArray(PACKET_SIZE) { 127.toByte() }
+
+    // Buffer the output stream at 16 packets worth of bytes.
+    // This lets the JVM coalesce small writes at the OS level before
+    // they hit the Bluetooth stack, reducing L2CAP frame overhead.
+    private const val OUTPUT_BUFFER_SIZE = PACKET_SIZE * 16
+
+    // Queue cap: at 120 packets/sec a cap of 12 gives ~100ms of buffering.
+    // Older events beyond this are dropped rather than transmitted late,
+    // which eliminates phantom strokes after lifting the pen.
+    // USB can afford a larger queue because it's faster; Bluetooth needs
+    // tighter control to avoid building up a backlog.
+    private const val MAX_QUEUE_SIZE = 12
 
     private var socket: BluetoothSocket? = null
     private var workerThread: Thread? = null
-    private val queue = LinkedBlockingQueue<ByteArray>()
+
+    // Bounded queue — offer() drops silently if full, preventing backlog.
+    private val queue = LinkedBlockingQueue<ByteArray>(MAX_QUEUE_SIZE)
 
     @Volatile private var isStreamOpen = false
     private var currentListener: TouchListener? = null
@@ -54,10 +52,6 @@ object BluetoothStreamService {
     // Public API
     // ------------------------------------------------------------------
 
-    /**
-     * Registers the touch/motion listeners on a view, identical to
-     * UsbStreamService.updateView(). Call this inside DrawingPad's factory.
-     */
     fun updateView(view: View) {
         currentListener?.let {
             view.setOnTouchListener(it)
@@ -66,19 +60,7 @@ object BluetoothStreamService {
         }
     }
 
-    /**
-     * BLOCKING. Call from Dispatchers.IO.
-     *
-     * Connects to [device] via RFCOMM and starts the write loop.
-     * Returns true on success, false on any failure.
-     *
-     * We try the secure channel first (encrypted + authenticated).
-     * If the device doesn't support it (older or unpaired hardware),
-     * we fall back to the insecure channel (still encrypted on modern
-     * stacks, but without MITM protection). This gives maximum
-     * device compatibility while preferring security when available.
-     */
-    @SuppressLint("MissingPermission") // Permissions are checked in MainActivity before this call
+    @SuppressLint("MissingPermission")
     fun connect(device: BluetoothDevice): Boolean {
         if (isStreamOpen) closeStream()
 
@@ -87,28 +69,30 @@ object BluetoothStreamService {
         val btSocket = openSocket(device) ?: return false
 
         return try {
-            // BluetoothSocket.connect() is blocking — must be on IO thread.
             btSocket.connect()
 
-            val outputStream = btSocket.outputStream
+            // Wrap the raw socket stream in a BufferedOutputStream.
+            // Writes to the buffer are fast; the buffer flushes to the
+            // Bluetooth stack in larger, more efficient chunks.
+            val bufferedStream = BufferedOutputStream(btSocket.outputStream, OUTPUT_BUFFER_SIZE)
+
             socket = btSocket
             isStreamOpen = true
             queue.clear()
 
             workerThread = Thread {
-                writeLoop(outputStream)
+                writeLoop(bufferedStream)
             }.apply {
                 name = "InkBridge-BtWriter"
+                priority = Thread.MAX_PRIORITY // Highest priority for minimum latency
                 start()
             }
 
-            // Wrap the output stream in the same queue-backed wrapper
-            // used by UsbStreamService so TouchListener is transport-agnostic.
             val queueWrapper = object : OutputStream() {
                 override fun write(b: Int) { /* unused */ }
                 override fun write(b: ByteArray) {
-                    // Non-blocking offer — drop packet on backpressure,
-                    // same behaviour as USB to prevent stroke lag.
+                    // offer() is non-blocking and drops the packet if the
+                    // queue is full — intentional backpressure behaviour.
                     queue.offer(b)
                 }
             }
@@ -125,10 +109,6 @@ object BluetoothStreamService {
         }
     }
 
-    /**
-     * Closes the stream cleanly. Safe to call from any thread.
-     * Mirrors UsbStreamService.closeStream() exactly.
-     */
     fun closeStream() {
         Log.d(TAG, "Closing Bluetooth stream...")
         isStreamOpen = false
@@ -149,28 +129,13 @@ object BluetoothStreamService {
     }
 
     // ------------------------------------------------------------------
-    // Device discovery helpers (called from MainActivity)
+    // Discovery helpers
     // ------------------------------------------------------------------
 
-    /**
-     * Returns all devices the system has already paired with.
-     * No scan needed — instant result. Shown as the primary list
-     * in the picker dialog.
-     */
     @SuppressLint("MissingPermission")
-    fun getPairedDevices(adapter: BluetoothAdapter): List<BluetoothDevice> {
-        return adapter.bondedDevices.toList()
-    }
+    fun getPairedDevices(adapter: BluetoothAdapter): List<BluetoothDevice> =
+        adapter.bondedDevices.toList()
 
-    /**
-     * Starts a Classic Bluetooth discovery scan.
-     * Results arrive via BluetoothDevice.ACTION_FOUND broadcast —
-     * register a receiver in MainActivity and collect devices there.
-     *
-     * Note: discovery is a heavy operation that temporarily degrades
-     * connection throughput. We only run it on explicit user request
-     * (the "Scan for new devices" action in the picker).
-     */
     @SuppressLint("MissingPermission")
     fun startDiscovery(adapter: BluetoothAdapter) {
         if (adapter.isDiscovering) adapter.cancelDiscovery()
@@ -186,15 +151,9 @@ object BluetoothStreamService {
     // Internal helpers
     // ------------------------------------------------------------------
 
-    /**
-     * Tries to open a secure RFCOMM socket, falls back to insecure
-     * if that fails. Insecure sockets are still encrypted on Android 10+
-     * but skip MITM pairing — acceptable for LAN/local use.
-     */
     @SuppressLint("MissingPermission")
     private fun openSocket(device: BluetoothDevice): BluetoothSocket? {
         return try {
-            Log.d(TAG, "Trying secure RFCOMM socket...")
             device.createRfcommSocketToServiceRecord(SPP_UUID)
         } catch (e: IOException) {
             Log.w(TAG, "Secure socket failed, falling back to insecure: ${e.message}")
@@ -208,21 +167,59 @@ object BluetoothStreamService {
     }
 
     /**
-     * Write loop — identical structure to UsbStreamService.writeLoop().
-     * Polls the queue with a 500 ms timeout; sends a heartbeat on idle
-     * so the desktop can detect a dropped connection quickly.
+     * Write loop — optimised for low latency over Bluetooth.
+     *
+     * Key difference from UsbStreamService: instead of writing one packet
+     * per iteration, we drain the entire queue in a single pass and
+     * batch all pending packets into one write() call. This means one
+     * L2CAP radio transaction per event burst instead of one per packet,
+     * which is the single biggest latency win available in software.
+     *
+     * The batch buffer is reused across iterations to avoid GC pressure
+     * during fast stylus movement.
      */
-    private fun writeLoop(stream: OutputStream) {
-        val heartbeat = ByteArray(HEARTBEAT_PACKET_SIZE) { 127.toByte() }
+    private fun writeLoop(stream: BufferedOutputStream) {
+        // Reusable batch buffer — pre-allocated to avoid per-frame allocation.
+        val batchBuffer = ByteArrayOutputStream(OUTPUT_BUFFER_SIZE)
+        // Drain target — collect up to this many packets per flush.
+        val drainBatch = ArrayList<ByteArray>(MAX_QUEUE_SIZE)
 
         while (isStreamOpen) {
             try {
-                val packet = queue.poll(500, TimeUnit.MILLISECONDS)
-                if (packet != null) {
-                    stream.write(packet)
+                // Block for up to 100ms waiting for the first packet.
+                // 100ms is short enough that the heartbeat interval stays
+                // reasonable while not burning CPU on an empty queue.
+                val first = queue.poll(100, TimeUnit.MILLISECONDS)
+
+                if (first != null) {
+                    // Got at least one packet. Drain everything else that
+                    // arrived while we were waiting or processing — this is
+                    // the key batching step. drainTo() is non-blocking and
+                    // atomic on LinkedBlockingQueue.
+                    drainBatch.clear()
+                    drainBatch.add(first)
+                    queue.drainTo(drainBatch)
+
+                    // Assemble all drained packets into a single byte array.
+                    batchBuffer.reset()
+                    for (packet in drainBatch) {
+                        batchBuffer.write(packet)
+                    }
+
+                    // One write() call for the entire batch — one L2CAP frame.
+                    stream.write(batchBuffer.toByteArray())
+                    stream.flush()
+
+                    if (DEBUG && drainBatch.size > 1) {
+                        Log.d(TAG, "Batched ${drainBatch.size} packets in one write")
+                    }
                 } else {
-                    stream.write(heartbeat)
+                    // Queue empty after timeout — send heartbeat to keep
+                    // the connection alive and let the desktop detect drops.
+                    stream.write(HEARTBEAT)
+                    stream.flush()
                 }
+
             } catch (e: Exception) {
                 Log.e(TAG, "Bluetooth write loop error: ${e.message}")
                 isStreamOpen = false

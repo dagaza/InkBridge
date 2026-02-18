@@ -19,6 +19,7 @@
 #include "accessory.h"
 #include "displayscreentranslator.h"
 #include "pressuretranslator.h"
+#include "bluetoothserver.h"
 
 class Backend : public QObject
 {
@@ -32,6 +33,8 @@ class Backend : public QObject
     Q_PROPERTY(int pressureSensitivity READ pressureSensitivity NOTIFY settingsChanged)
     Q_PROPERTY(int minPressure READ minPressure NOTIFY settingsChanged)
     Q_PROPERTY(bool swapAxis READ swapAxis NOTIFY settingsChanged)
+    Q_PROPERTY(bool isBluetoothRunning READ isBluetoothRunning NOTIFY bluetoothStatusChanged)
+
 
 public:
     static bool isDebugMode;
@@ -54,6 +57,8 @@ public:
     // NEW: The "Software Eject" button
     Q_INVOKABLE void forceUsbReset();
 
+    bool isBluetoothRunning() const;
+
 
 public slots:
     void refreshScreens();
@@ -67,6 +72,7 @@ public slots:
     void toggleWifi();
     void toggleDebug(bool enable);
     void resetDefaults();
+    void toggleBluetooth();
 
 signals:
     void screenListChanged();
@@ -75,13 +81,15 @@ signals:
     void usbDevicesChanged();
     void wifiStatusChanged();
     void settingsChanged();
+    void bluetoothStatusChanged();
 
 private:
     VirtualStylus *m_stylus;
     DisplayScreenTranslator *m_displayTranslator;
     PressureTranslator *m_pressureTranslator;
     WifiServer *m_wifiServer;
-    
+    BluetoothServer *m_bluetoothServer;
+        
     QVector<QRect> m_screenRects;
     QVariantList m_screenGeometriesVariant;
     QStringList m_screenNames;
@@ -91,6 +99,7 @@ private:
     QString m_status;
     bool m_connected;
     bool m_wifiRunning;
+    bool m_bluetoothRunning;
     bool trySwitchToAccessoryMode(libusb_device *dev, libusb_device_handle *handle);
     
     int m_pressureSensitivity;
@@ -99,6 +108,7 @@ private:
 
     void updateStatus(QString msg, bool connected);
     void handleWifiData(QByteArray data);
+    void handleBluetoothData(QByteArray data);
 
     // --- NEW: Auto-Connect Private Members ---
     std::atomic<bool> m_autoScanRunning;

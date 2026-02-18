@@ -24,6 +24,7 @@ Backend::Backend(QObject *parent)
     , m_minPressure(0)
     , m_swapAxis(false)
     , m_autoScanRunning(false) // Initialize flag
+    , m_bluetoothRunning(false)
 {
     m_displayTranslator = new DisplayScreenTranslator();
     m_pressureTranslator = new PressureTranslator();
@@ -44,8 +45,34 @@ Backend::Backend(QObject *parent)
     // -----------------------------
 
     m_stylus->initializeStylus();
+
+    m_bluetoothServer = new BluetoothServer(this);
+
+    connect(m_bluetoothServer, &BluetoothServer::clientConnected,
+            this, [this](QString address) {
+        qDebug() << "[BT] Client connected from" << address;
+        updateStatus("Connected via Bluetooth (" + address + ")", true);
+    });
+
+    connect(m_bluetoothServer, &BluetoothServer::clientDisconnected,
+            this, [this]() {
+        qDebug() << "[BT] Client disconnected";
+        updateStatus("Bluetooth Listening...", false);
+    });
+
+    connect(m_bluetoothServer, &BluetoothServer::dataReceived,
+            this, &Backend::handleBluetoothData);
+
+    connect(m_bluetoothServer, &BluetoothServer::serverError,
+            this, [this](QString msg) {
+        qDebug() << "[BT] Server error:" << msg;
+        updateStatus("Bluetooth Error: " + msg, false);
+        m_bluetoothRunning = false;
+        emit bluetoothStatusChanged();
+    });
+
     refreshScreens();
-   
+
     // OPTIONAL: Start scanning immediately on launch
     startAutoConnect(); 
 
@@ -55,6 +82,9 @@ Backend::Backend(QObject *parent)
 
 Backend::~Backend() {
     stopAutoConnect(); // Stop thread safely
+    if (m_bluetoothServer) {
+        m_bluetoothServer->stopServer();
+    }
     delete m_stylus;
     delete m_displayTranslator;
     delete m_pressureTranslator;
@@ -67,6 +97,7 @@ QString Backend::connectionStatus() const { return m_status; }
 bool Backend::isConnected() const { return m_connected; }
 QStringList Backend::usbDevices() const { return m_usbDeviceNames; }
 bool Backend::isWifiRunning() const { return m_wifiRunning; }
+bool Backend::isBluetoothRunning() const { return m_bluetoothRunning; }
 int Backend::pressureSensitivity() const { return m_pressureSensitivity; }
 int Backend::minPressure() const { return m_minPressure; }
 bool Backend::swapAxis() const { return m_swapAxis; }
@@ -237,6 +268,25 @@ void Backend::toggleWifi() {
     */
 }
 
+void Backend::toggleBluetooth() {
+    m_bluetoothRunning = !m_bluetoothRunning;
+
+    if (m_bluetoothRunning) {
+        bool started = m_bluetoothServer->startServer();
+        if (started) {
+            updateStatus("Bluetooth Listening (Waiting for Tablet...)", false);
+        } else {
+            // startServer() already emitted serverError with the reason.
+            m_bluetoothRunning = false;
+        }
+    } else {
+        m_bluetoothServer->stopServer();
+        updateStatus("Bluetooth Stopped", false);
+    }
+
+    emit bluetoothStatusChanged();
+}
+
 void Backend::handleWifiData(QByteArray data) {
     // 1. Safety Check
     if (data.isEmpty() || !m_stylus) return;
@@ -285,6 +335,47 @@ void Backend::handleWifiData(QByteArray data) {
     // For a local LAN Stylus, this is rare, but a ring-buffer would solve it 100%.
     // For this implementation, dropping the partial fragment is acceptable 
     // because the next pen event comes in <8ms.
+}
+
+void Backend::handleBluetoothData(QByteArray data) {
+    if (data.isEmpty() || !m_stylus) return;
+
+    if (Backend::isDebugMode) {
+        qDebug() << "[BT] Received" << data.size() << "bytes. Hex:" << data.toHex();
+    }
+
+    const int packetSize = sizeof(PenPacket);
+    int offset = 0;
+
+    while (offset + packetSize <= data.size()) {
+        const PenPacket *packet =
+            reinterpret_cast<const PenPacket *>(data.constData() + offset);
+
+        // Ignore heartbeat packets (all bytes == 127).
+        // The Android client sends these during idle to keep the connection alive.
+        bool isHeartbeat = true;
+        const uint8_t *raw = reinterpret_cast<const uint8_t *>(packet);
+        for (int i = 0; i < packetSize; ++i) {
+            if (raw[i] != 127) { isHeartbeat = false; break; }
+        }
+        if (isHeartbeat) { offset += packetSize; continue; }
+
+        AccessoryEventData eventData;
+        eventData.toolType = packet->toolType;
+        eventData.action   = packet->action;
+        eventData.x        = packet->x;
+        eventData.y        = packet->y;
+        eventData.pressure = static_cast<float>(packet->pressure) / 1000.0f;
+        eventData.tiltX    = packet->tiltX;
+        eventData.tiltY    = packet->tiltY;
+
+        m_stylus->handleAccessoryEventData(&eventData);
+
+        offset += packetSize;
+    }
+
+    // Partial packet at end of buffer is dropped — acceptable for the same
+    // reason as in handleWifiData(): the next event arrives in < 8ms.
 }
 
 void Backend::toggleDebug(bool enable) {

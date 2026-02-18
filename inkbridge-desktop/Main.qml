@@ -28,6 +28,7 @@ ApplicationWindow {
     // Brand Colors - More vibrant
     property color accentCol: "#0084ff"
     property color accentHoverCol: "#0073e6"
+    property color bluetoothCol: "#0082C8"
     property color wifiCol: "#00a8e8"
     property color successCol: "#00c853"
     property color errorCol: "#ff3b30"
@@ -348,6 +349,51 @@ ApplicationWindow {
                     Behavior on scale { NumberAnimation { duration: 100 } }
                     
                     onClicked: backend.toggleWifi()
+                }
+
+                Button {
+                    id: bluetoothBtn
+                    visible: true
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 48
+                    text: backend.isBluetoothRunning ? "Stop Bluetooth" : "Start Bluetooth"
+
+                    property color btCol: "#0082C8"   // Bluetooth blue — add to window properties if preferred
+                    property color baseColor: backend.isBluetoothRunning ? errorCol : btCol
+                    property color hoverColor: backend.isBluetoothRunning ? Qt.darker(errorCol, 1.1) : Qt.darker(btCol, 1.1)
+
+                    contentItem: Text {
+                        text: parent.text
+                        font.weight: Font.DemiBold
+                        font.pixelSize: 14
+                        font.letterSpacing: 0.2
+                        color: "white"
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+
+                    background: Rectangle {
+                        color: parent.down ? Qt.darker(parent.baseColor, 1.2) :
+                            (parent.hovered ? parent.hoverColor : parent.baseColor)
+                        radius: 10
+
+                        Behavior on color { ColorAnimation { duration: animDuration } }
+
+                        layer.enabled: true
+                        layer.effect: DropShadow {
+                            transparentBorder: true
+                            horizontalOffset: 0
+                            verticalOffset: 2
+                            radius: 8.0
+                            samples: 17
+                            color: Qt.rgba(0, 0, 0, 0.15)
+                        }
+                    }
+
+                    scale: down ? 0.97 : 1.0
+                    Behavior on scale { NumberAnimation { duration: 100 } }
+
+                    onClicked: backend.toggleBluetooth()
                 }
 
                 Item { Layout.fillHeight: true }
