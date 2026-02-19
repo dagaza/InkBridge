@@ -47,8 +47,8 @@ set(PROJECT_SOURCES
     backend.h
     
     # NEW: Networking (Phase 6)
-    wifiserver.cpp
-    wifiserver.h
+    wifidirectserver.cpp
+    wifidirectserver.h
     bluetoothserver.cpp
     bluetoothserver.h
     protocol.h

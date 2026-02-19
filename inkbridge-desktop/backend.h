@@ -14,7 +14,7 @@
 #include <thread> // REQUIRED
 #include <chrono> // REQUIRED
 #include <libusb-1.0/libusb.h>
-#include "wifiserver.h"
+#include "wifidirectserver.h"
 #include "virtualstylus.h"
 #include "accessory.h"
 #include "displayscreentranslator.h"
@@ -29,7 +29,7 @@ class Backend : public QObject
     Q_PROPERTY(QString connectionStatus READ connectionStatus NOTIFY connectionStatusChanged)
     Q_PROPERTY(bool isConnected READ isConnected NOTIFY isConnectedChanged)
     Q_PROPERTY(QStringList usbDevices READ usbDevices NOTIFY usbDevicesChanged)
-    Q_PROPERTY(bool isWifiRunning READ isWifiRunning NOTIFY wifiStatusChanged)
+    Q_PROPERTY(bool isWifiRunning READ isWifiDirectRunning NOTIFY wifiDirectStatusChanged)
     Q_PROPERTY(int pressureSensitivity READ pressureSensitivity NOTIFY settingsChanged)
     Q_PROPERTY(int minPressure READ minPressure NOTIFY settingsChanged)
     Q_PROPERTY(bool swapAxis READ swapAxis NOTIFY settingsChanged)
@@ -46,7 +46,7 @@ public:
     QString connectionStatus() const;
     bool isConnected() const;
     QStringList usbDevices() const;
-    bool isWifiRunning() const;
+    bool isWifiDirectRunning() const;
     int pressureSensitivity() const;
     int minPressure() const;
     bool swapAxis() const;
@@ -69,7 +69,7 @@ public slots:
     void setPressureSensitivity(int value);
     void setMinPressure(int value);
     void setSwapAxis(bool swap);
-    void toggleWifi();
+    void toggleWifiDirect();
     void toggleDebug(bool enable);
     void resetDefaults();
     void toggleBluetooth();
@@ -79,7 +79,7 @@ signals:
     void connectionStatusChanged();
     void isConnectedChanged();
     void usbDevicesChanged();
-    void wifiStatusChanged();
+    void wifiDirectStatusChanged();
     void settingsChanged();
     void bluetoothStatusChanged();
 
@@ -87,7 +87,7 @@ private:
     VirtualStylus *m_stylus;
     DisplayScreenTranslator *m_displayTranslator;
     PressureTranslator *m_pressureTranslator;
-    WifiServer *m_wifiServer;
+    WifiDirectServer *m_wifiDirectServer;
     BluetoothServer *m_bluetoothServer;
         
     QVector<QRect> m_screenRects;
@@ -98,7 +98,7 @@ private:
     
     QString m_status;
     bool m_connected;
-    bool m_wifiRunning;
+    bool m_wifiDirectRunning;
     bool m_bluetoothRunning;
     bool trySwitchToAccessoryMode(libusb_device *dev, libusb_device_handle *handle);
     
@@ -107,7 +107,7 @@ private:
     bool m_swapAxis;
 
     void updateStatus(QString msg, bool connected);
-    void handleWifiData(QByteArray data);
+    void handleWifiDirectData(QByteArray data);
     void handleBluetoothData(QByteArray data);
 
     // --- NEW: Auto-Connect Private Members ---

@@ -1,6 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
+    
+    <!-- WiFi Direct -->
+    <!--Note: ACCESS_FINE_LOCATION is required for WiFi Direct on Android 12 and below.
+    // On Android 13+ it's replaced by NEARBY_WIFI_DEVICES.-->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
+        android:usesPermissionFlags="neverForLocation"
+        tools:targetApi="tiramisu" />
+    
     <!-- Bluetooth permissions -->
     <!-- Legacy (pre-API 31 / Android 11 and below) — granted at install time -->
     <uses-permission android:name="android.permission.BLUETOOTH"
