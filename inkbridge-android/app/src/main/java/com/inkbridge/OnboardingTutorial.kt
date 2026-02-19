@@ -57,7 +57,7 @@ fun OnboardingTutorialDialog(
             Text("Map to Screen:\nIn the Desktop App, click on the monitor you want your tablet to control. If your stylus clicks aren't registering, ensure you've mapped to the correct screen!\n\nFixing Tablet Rotation:\nIf you hold your tablet in Portrait mode but draw on a Landscape monitor, your strokes will be swapped. Check the 'Fix Rotation (Swap X/Y)' box in the Advanced Settings to fix this.", color = textColor)
         },
         TutorialPage("Pen Physics", Icons.Default.Edit) {
-            Text("Pressure Sensitivity:\nAdjusts the curve of your strokes. Higher values mean you must press harder to reach maximum thickness.\n\nMinimum Pressure (Deadzone):\nCreates a baseline threshold. If you experience 'ghost strokes' while hovering, increase this slightly to ignore light touches.\n\nThe Eraser:\nInkBridge uses a 'Clean Handover' protocol. If your stylus has a side button, you can confidently switch to the eraser mid-hover.", color = textColor)
+            Text("Pressure Sensitivity:\nAdjusts the curve of your strokes. Higher values mean you must press harder to reach maximum thickness.\n\nMinimum Pressure (Deadzone):\nCreates a baseline threshold. If you experience 'ghost strokes' while hovering, increase this slightly to ignore light touches.\n\nThe Eraser:\nInkBridge uses a 'Clean Handover' protocol. If your stylus has a side button, you can confidently switch to the eraser mid-hover. \n\nFinger or Stylus:\nYou can select stylus input-only from the Android app's main menu to ensure touching the screen with your hand while drawing won't cause any unwanted input. You can also select finger input if that's your preferred input method.", color = textColor)
         }
     )
 

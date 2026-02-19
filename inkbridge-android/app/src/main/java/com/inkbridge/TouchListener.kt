@@ -7,7 +7,10 @@ import java.io.OutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
-class TouchListener(private val outputStream: OutputStream) : View.OnTouchListener, View.OnGenericMotionListener {
+class TouchListener(
+    private val outputStream: OutputStream,
+    private val stylusOnly: Boolean = false  // read once at construction, not per-event
+) : View.OnTouchListener, View.OnGenericMotionListener {
 
     // Pre-allocated buffer for a single packet — reused every event to
     // avoid per-frame heap allocation during fast stylus movement.
@@ -30,8 +33,15 @@ class TouchListener(private val outputStream: OutputStream) : View.OnTouchListen
 
     // --- 2. PROCESS EVENT ---
     private fun processEvent(view: View, event: MotionEvent): Boolean {
-        val action     = event.actionMasked
         val toolType   = event.getToolType(0)
+
+        // Stylus-only gatekeeper — checked against a cached boolean, not
+        // a live SharedPreferences read, so cost is a single branch per event.
+        if (stylusOnly && toolType == MotionEvent.TOOL_TYPE_FINGER) {
+            return true // Consume the event to block OS gestures, but send nothing
+        }
+
+        val action     = event.actionMasked
         val w          = view.width.toFloat()
         val h          = view.height.toFloat()
         val isButtonPressed = (event.buttonState and MotionEvent.BUTTON_STYLUS_PRIMARY) != 0

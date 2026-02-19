@@ -1,5 +1,6 @@
 package com.inkbridge
 
+import android.content.Context
 import android.hardware.usb.UsbAccessory
 import android.hardware.usb.UsbManager
 import android.os.ParcelFileDescriptor
@@ -18,12 +19,11 @@ object UsbStreamService {
     private var fileDescriptor: ParcelFileDescriptor? = null
     private var workerThread: Thread? = null
     private var queue = LinkedBlockingQueue<ByteArray>()
-    
+
     @Volatile private var isStreamOpen = false
     private var currentListener: TouchListener? = null
 
-    // Heartbeat
-    private const val HEARTBEAT_PACKET_SIZE = 22 
+    private const val HEARTBEAT_PACKET_SIZE = 22
 
     fun updateView(view: View) {
         if (currentListener != null) {
@@ -34,12 +34,12 @@ object UsbStreamService {
     }
 
     /**
-     * BLOCKING call to open the stream. 
+     * BLOCKING call to open the stream.
      * Call this from a background thread (Dispatchers.IO).
      */
-    fun connect(usbManager: UsbManager, accessory: UsbAccessory): Boolean {
+    fun connect(usbManager: UsbManager, accessory: UsbAccessory, context: Context): Boolean {
         if (isStreamOpen) {
-            closeStream() // Force clean reset
+            closeStream()
         }
 
         return try {
@@ -47,37 +47,36 @@ object UsbStreamService {
 
             if (fileDescriptor == null) {
                 Log.e(TAG, "OS refused to open accessory. PC app likely not running.")
-                return false // <--- This prevents the UI switch in MainActivity
+                return false
             }
 
             val fd: FileDescriptor = fileDescriptor!!.fileDescriptor
             val rawOutputStream = FileOutputStream(fd)
-            
-            // Start the Writer Thread
+
             isStreamOpen = true
             queue.clear()
-            
+
             workerThread = Thread {
                 writeLoop(rawOutputStream)
-            }.apply { 
+            }.apply {
                 name = "InkBridge-UsbWriter"
-                start() 
+                start()
             }
 
-            // Create wrapper that pushes to Queue
             val queueWrapper = object : OutputStream() {
                 override fun write(b: Int) { /* Unused */ }
                 override fun write(b: ByteArray) {
-                    // Non-blocking offer. Drop if full to prevent lag.
                     if (!queue.offer(b)) {
-                        // Queue full, packet dropped (Backpressure)
+                        // Queue full, packet dropped (backpressure)
                     }
                 }
             }
 
-            // Initialize Listener
-            currentListener = TouchListener(queueWrapper)
-            
+            // Read preference once at connection time — not per-event
+            val stylusOnly = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+                .getBoolean("stylus_only", false)
+            currentListener = TouchListener(queueWrapper, stylusOnly)
+
             Log.d(TAG, "USB Stream Opened Successfully")
             true
 
@@ -90,27 +89,23 @@ object UsbStreamService {
 
     private fun writeLoop(stream: FileOutputStream) {
         val heartbeat = ByteArray(HEARTBEAT_PACKET_SIZE) { 127.toByte() }
-        
+
         while (isStreamOpen) {
             try {
-                // Poll: Wait up to 500ms for a touch packet
                 val packet = queue.poll(500, TimeUnit.MILLISECONDS)
-                
+
                 if (packet != null) {
                     stream.write(packet)
                 } else {
-                    // Timeout = Send Heartbeat
                     stream.write(heartbeat)
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Write Loop Error: ${e.message}")
-                // If the stream dies, we close everything
                 isStreamOpen = false
                 break
             }
         }
-        
-        // Cleanup when loop exits
+
         try { stream.close() } catch (e: Exception) {}
     }
 
@@ -118,13 +113,13 @@ object UsbStreamService {
         Log.d(TAG, "Closing Stream...")
         isStreamOpen = false
         try {
-            workerThread?.interrupt() // Wake up thread if sleeping
-            workerThread?.join(1000)  // Wait for it to die
+            workerThread?.interrupt()
+            workerThread?.join(1000)
         } catch (e: Exception) {}
-        
+
         workerThread = null
         currentListener = null
-        
+
         try {
             fileDescriptor?.close()
         } catch (e: Exception) {}

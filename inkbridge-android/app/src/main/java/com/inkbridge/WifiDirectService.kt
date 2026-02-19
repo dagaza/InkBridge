@@ -43,6 +43,8 @@ object WifiDirectService {
     private var p2pChannel: WifiP2pManager.Channel? = null
     private var beaconThread: Thread? = null
 
+    private var appContext: Context? = null
+
     // --- Callbacks ---
     var onStatusChanged: ((String) -> Unit)? = null
     var onConnected: (() -> Unit)? = null
@@ -61,6 +63,7 @@ object WifiDirectService {
 
     @SuppressLint("MissingPermission")
     fun createGroupAndConnect(context: Context) {
+        appContext = context.applicationContext
         val manager = p2pManager ?: run {
             onError?.invoke("WiFi Direct not available on this device.")
             return
@@ -327,7 +330,9 @@ object WifiDirectService {
                 queue.offer(Arrays.copyOfRange(b, off, off + len))
             }
         }
-        currentListener = TouchListener(queueWrapper)
+        val stylusOnly = appContext?.getSharedPreferences("settings", Context.MODE_PRIVATE)
+            ?.getBoolean("stylus_only", false) ?: false
+        currentListener = TouchListener(queueWrapper, stylusOnly)
         Log.d(TAG, "WiFi Direct stream open.")
         onConnected?.invoke()
     }

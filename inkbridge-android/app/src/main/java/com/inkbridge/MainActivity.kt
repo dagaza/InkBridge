@@ -371,7 +371,7 @@ class MainActivity : ComponentActivity() {
             var connected = false
             withContext(Dispatchers.IO) {
                 for (i in 0..5) {
-                    connected = UsbStreamService.connect(usbManager, accessory)
+                    connected = UsbStreamService.connect(usbManager, accessory, this@MainActivity)
                     if (connected) break
                     kotlinx.coroutines.delay(500)
                 }
@@ -443,7 +443,7 @@ class MainActivity : ComponentActivity() {
             withContext(Dispatchers.Main) { statusMessage = "Resetting..." }
             UsbStreamService.closeStream()
             withContext(Dispatchers.Main) { statusMessage = "Opening Connection..." }
-            val success = UsbStreamService.connect(usbManager, accessory)
+            val success = UsbStreamService.connect(usbManager, accessory, this@MainActivity)
             withContext(Dispatchers.Main) {
                 if (success) {
                     isConnected = true
@@ -536,7 +536,7 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch(Dispatchers.IO) {
             withContext(Dispatchers.Main) { statusMessage = "Connecting via Bluetooth..." }
             BluetoothStreamService.closeStream()
-            val success = BluetoothStreamService.connect(device)
+            val success = BluetoothStreamService.connect(device, this@MainActivity)
             withContext(Dispatchers.Main) {
                 if (success) {
                     BluetoothStreamService.updateView(view)
@@ -640,7 +640,8 @@ class MainActivity : ComponentActivity() {
                             imageVector = if (isStylusOnly) Icons.Default.Edit else Icons.Default.TouchApp,
                             contentDescription = if (isStylusOnly) "Stylus Only Mode" else "Touch & Stylus Mode",
                             // Highlight in primary color when Stylus Only is active
-                            tint = if (isStylusOnly) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+                            tint = if (isStylusOnly) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+                            modifier = Modifier.size(32.dp) // <-- Increased icon size
                         )
                     }
 
@@ -649,7 +650,8 @@ class MainActivity : ComponentActivity() {
                         Icon(
                             imageVector = Icons.Default.Info,
                             contentDescription = "Show Tutorial",
-                            tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+                            tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+                            modifier = Modifier.size(32.dp) // <-- Increased icon size
                         )
                     }
 
@@ -669,7 +671,8 @@ class MainActivity : ComponentActivity() {
                         Icon(
                             imageVector = if (isDarkTheme) Icons.Default.LightMode else Icons.Default.DarkMode,
                             contentDescription = if (isDarkTheme) "Switch to light mode" else "Switch to dark mode",
-                            tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+                            tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+                            modifier = Modifier.size(32.dp) // <-- Increased icon size
                         )
                     }
                 }
