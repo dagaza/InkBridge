@@ -921,7 +921,7 @@ class MainActivity : ComponentActivity() {
                 Color(0xFF02FAFF), // Cyan
                 Color(0xFF6801FF)  // Purple
             ),
-            radius = 600f
+            radius = 800f
         )
 
         Button(

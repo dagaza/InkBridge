@@ -1,13 +1,18 @@
 # InkBridge
 
-**The bridge between your Android device and your Linux creative suite.**
+**The high-performance bridge between your Android device and your Linux desktop.**
 
-InkBridge transforms any Android device into a high-precision input surface for Linux. Whether you are using a professional S-Pen on a tablet, a "dumb" stylus on a phone, or just your fingertips, InkBridge maps your touch data directly to a virtual Linux digitizer. 
+*(Because Tux deserves a super display, too. If you just switched from Windows and are desperately Googling for a "SuperDisplay alternative for Linux"—welcome home.)*
 
-Engineered for near-zero latency and professional-grade control, it bridges the gap between your mobile hardware and desktop powerhouses like **Krita, Blender, GIMP, and Inkscape.**
+InkBridge transforms any Android device into a high-precision, system-wide input surface for Linux. Whether you are using a professional S-Pen on a Galaxy Tab, a basic capacitive stylus, or your fingertips, InkBridge maps your raw touch data directly to a virtual Linux digitizer at the kernel level. 
 
-### 🌐 Beyond the Cable
-While we currently offer a rock-solid **USB (AOA)** wired connection for maximum stability and speed, InkBridge is built with an extensible architecture. **Wireless support (Bluetooth & Wi-Fi)** is currently in development to bring tether-free creativity to your Linux desktop.
+Because it acts as a native hardware input device, it works flawlessly with **any** software on your computer—from creative powerhouses like **Krita, Blender, GIMP, and Inkscape**, to simple whiteboarding tools, PDF annotators, and even general desktop navigation.
+
+### 🌐 Wired & Wireless Freedom
+Engineered for near-zero latency and professional-grade control, InkBridge offers three dedicated connection protocols to fit your workflow:
+* **USB (AOA):** The gold standard. Bypasses standard network layers for rock-solid, absolute zero-latency wired performance.
+* **Wi-Fi Direct:** High-speed, tether-free creativity. Creates a secure, peer-to-peer tunnel that automatically bypasses complex Linux firewall and router configurations.
+* **Bluetooth:** A convenient, completely wireless backup option for quick sketching and casual navigation on the go.
 
 #### Desktop UI
 ![InkBridge-Desktop UI Screenshot](docs/screenshot.png)
@@ -23,6 +28,7 @@ While we currently offer a rock-solid **USB (AOA)** wired connection for maximum
     * **Logarithmic Pressure Curve:** Custom-tuned math for natural, responsive strokes (4096 levels).
     * **True 3D Tilt:** Projects Android sensor data to standard Linux EV_ABS tilt axes (-90° to +90°).
     * **Reliable Eraser:** "Clean Handover" protocol ensures 100% reliable tool switching between Pen and Eraser during hover or active strokes.
+    * **Finger/Stylus-only Input Options:** Choose between finger or stylus-only input to ensure touching the screen with your hand won't cause unwanted inputs.
 * **Linux Native Virtual Driver:** Creates a system-level `uinput` device ("pen-emu") compatible with X11 and Wayland (libinput). Use your stylus as a mouse.
 * **Modern Desktop UI (Qt/QML):**
     * **Multi-Monitor Mapping:** Select exactly which screen the tablet maps to.
