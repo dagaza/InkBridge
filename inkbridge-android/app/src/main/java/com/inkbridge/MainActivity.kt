@@ -29,6 +29,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -49,6 +50,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -84,6 +86,11 @@ class MainActivity : ComponentActivity() {
     private var pairedBtDevices by mutableStateOf<List<BluetoothDevice>>(emptyList())
     private var nearbyBtDevices by mutableStateOf<List<BluetoothDevice>>(emptyList())
     private var isBtScanning by mutableStateOf(false)
+
+    // ---WiFi state ---
+    var wifiDirectSsid         by mutableStateOf("")
+    var wifiDirectPassphrase   by mutableStateOf("")
+    var showWifiDirectDialog   by mutableStateOf(false)
 
     // Receives ACTION_FOUND broadcasts during a discovery scan.
     private val bluetoothScanReceiver = object : BroadcastReceiver() {
@@ -140,16 +147,16 @@ class MainActivity : ComponentActivity() {
     }
 
     // Permission launcher for Android 13+ Wi-Fi scanning
-    private val requestWifiPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { isGranted: Boolean ->
-        if (isGranted) {
-            val rootView = window.decorView.findViewById<View>(android.R.id.content)
-            runWifiDiscovery(rootView)
-        } else {
-            statusMessage = "Permission Denied. Cannot Scan."
-        }
-    }
+    // private val requestWifiPermissionLauncher = registerForActivityResult(
+    //     ActivityResultContracts.RequestPermission()
+    // ) { isGranted: Boolean ->
+    //     if (isGranted) {
+    //         val rootView = window.decorView.findViewById<View>(android.R.id.content)
+    //         runWifiDiscovery(rootView)
+    //     } else {
+    //         statusMessage = "Permission Denied. Cannot Scan."
+    //     }
+    // }
 
     // Permission launcher for Android 12+ Bluetooth
     private val requestBluetoothPermissionLauncher = registerForActivityResult(
@@ -160,6 +167,17 @@ class MainActivity : ComponentActivity() {
             openBluetoothPicker()
         } else {
             statusMessage = "Bluetooth permission denied."
+        }
+    }
+
+    // Permission launcher for WiFiDirect
+    private val requestWifiDirectPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        if (results.values.all { it }) {
+            WifiDirectService.createGroupAndConnect(this)
+        } else {
+            statusMessage = "WiFi Direct permission denied."
         }
     }
 
@@ -197,6 +215,31 @@ class MainActivity : ComponentActivity() {
 
         // Initialise Bluetooth adapter
         bluetoothAdapter = (getSystemService(BLUETOOTH_SERVICE) as BluetoothManager).adapter
+
+        // Initialise WiFiDirect
+        WifiDirectService.init(this)
+        WifiDirectService.onStatusChanged = { msg ->
+            runOnUiThread { statusMessage = msg }
+        }
+        WifiDirectService.onCredentialsReady = { ssid, passphrase ->
+            runOnUiThread {
+                wifiDirectSsid       = ssid
+                wifiDirectPassphrase = passphrase
+                showWifiDirectDialog = true   // opens the dialog
+            }
+        }
+        WifiDirectService.onConnected = {
+            runOnUiThread {
+                val rootView = window.decorView.findViewById<View>(android.R.id.content)
+                WifiDirectService.updateView(rootView)
+                isConnected          = true
+                showWifiDirectDialog = false
+                statusMessage        = "Connected via WiFi Direct"
+            }
+        }
+        WifiDirectService.onError = { msg ->
+            runOnUiThread { statusMessage = msg }
+        }
 
         // Apply saved theme preference
         val prefs = getSharedPreferences("settings", Context.MODE_PRIVATE)
@@ -339,7 +382,8 @@ class MainActivity : ComponentActivity() {
     private fun disconnectAll() {
         lifecycleScope.launch(Dispatchers.IO) {
             UsbStreamService.closeStream()
-            NetworkStreamService.closeStream()
+            WifiDirectService.closeStream()
+            showWifiDirectDialog = false
             BluetoothStreamService.closeStream()
             withContext(Dispatchers.Main) {
                 isConnected = false
@@ -409,54 +453,32 @@ class MainActivity : ComponentActivity() {
     // LOGIC: WIFI CONNECTION
     // ==========================================
 
-    private fun attemptWifiDiscovery(view: View) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            val permission = Manifest.permission.NEARBY_WIFI_DEVICES
-            if (ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED) {
-                runWifiDiscovery(view)
-            } else {
-                statusMessage = "Requesting Wi-Fi Permission..."
-                requestWifiPermissionLauncher.launch(permission)
+    private fun findAndConnectWifiDirect() {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        // Android 13+: only NEARBY_WIFI_DEVICES is needed for WiFi Direct.
+        // ACCESS_FINE_LOCATION is NOT required and cannot be requested this way.
+        val needed = listOf(Manifest.permission.NEARBY_WIFI_DEVICES)
+            .filter {
+                ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
             }
-        } else {
-            runWifiDiscovery(view)
+        if (needed.isNotEmpty()) {
+            requestWifiDirectPermissionLauncher.launch(needed.toTypedArray())
+            return
+        }
+    } else {
+        // Android 12 and below: ACCESS_FINE_LOCATION is required for WiFi Direct.
+        val needed = listOf(Manifest.permission.ACCESS_FINE_LOCATION)
+            .filter {
+                ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+            }
+        if (needed.isNotEmpty()) {
+            requestWifiDirectPermissionLauncher.launch(needed.toTypedArray())
+            return
         }
     }
-
-    private fun runWifiDiscovery(view: View) {
-        statusMessage = "Scanning for PC..."
-        lifecycleScope.launch(Dispatchers.IO) {
-            val ip = NetworkStreamService.discoverServerIP()
-            if (ip != null) {
-                withContext(Dispatchers.Main) {
-                    statusMessage = "Found $ip. Connecting..."
-                    attemptWifiConnection(ip, "4545", view)
-                }
-            } else {
-                withContext(Dispatchers.Main) {
-                    statusMessage = "Discovery Failed. Try Manual IP."
-                }
-            }
-        }
-    }
-
-    private fun attemptWifiConnection(ip: String, port: String, view: View) {
-        if (ip.isBlank()) return
-        val portNum = port.toIntOrNull() ?: 4545
-        lifecycleScope.launch(Dispatchers.IO) {
-            try {
-                NetworkStreamService.streamTouchInputToWifi(ip, portNum, view)
-                withContext(Dispatchers.Main) {
-                    isConnected = true
-                    statusMessage = "Connected via WiFi"
-                }
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    statusMessage = "WiFi Error: ${e.message}"
-                }
-            }
-        }
-    }
+    // All permissions satisfied — proceed.
+    WifiDirectService.createGroupAndConnect(this)
+}
 
     // ==========================================
     // LOGIC: BLUETOOTH CONNECTION
@@ -552,7 +574,7 @@ class MainActivity : ComponentActivity() {
                     isFocusableInTouchMode = true
                     keepScreenOn = true
                     UsbStreamService.updateView(this)
-                    NetworkStreamService.updateView(this)
+                    WifiDirectService.updateView(this)
                     BluetoothStreamService.updateView(this)
                 }
             },
@@ -664,18 +686,12 @@ class MainActivity : ComponentActivity() {
                         onClick = { findAndConnectBluetooth() }
                     )
 
-                    // --- HIDE WIFI FOR V0.2 ---
-                    /*
                     Spacer(modifier = Modifier.height(16.dp))
-                    GradientConnectButton("Auto-Discover WiFi", Icons.Default.Wifi) {
-                        onConnectRequested("WIFI_DISCOVER", "", "")
-                    }
-                    Spacer(modifier = Modifier.height(16.dp))
-                    TextButton(onClick = { showWifiDialog = true }) {
-                        Text(text = "Manual IP Input", color = Color.Gray)
-                    }
-                    */
-                    // --------------------------
+                    GradientConnectButton(
+                        text = "Connect via WiFi Direct",
+                        icon = Icons.Default.Wifi,
+                        onClick = { findAndConnectWifiDirect() }
+                    )
 
                     Spacer(modifier = Modifier.weight(1f))
 
@@ -713,15 +729,127 @@ class MainActivity : ComponentActivity() {
             )
         }
 
-        if (showWifiDialog) {
-            WifiConnectDialog(
-                onDismiss = { showWifiDialog = false },
-                onConnect = { ip, port ->
-                    showWifiDialog = false
-                    onConnectRequested("WIFI_MANUAL", ip, port)
+        // WiFi Direct credentials dialog  ← ADD THIS BLOCK
+        if (showWifiDirectDialog) {
+            WifiDirectCredentialsDialog(
+                ssid       = wifiDirectSsid,
+                passphrase = wifiDirectPassphrase,
+                onConfirm  = { WifiDirectService.userConfirmedDesktopConnected() },
+                onDismiss  = {
+                    showWifiDirectDialog = false
+                    WifiDirectService.closeStream()
                 }
             )
         }
+    }
+
+    @Composable
+    fun WifiDirectCredentialsDialog(
+        ssid: String,
+        passphrase: String,
+        onConfirm: () -> Unit,
+        onDismiss: () -> Unit
+    ) {
+        val isDark = isSystemInDarkTheme()
+
+        AlertDialog(
+            onDismissRequest = onDismiss,
+            containerColor   = if (isDark) Color(0xFF1A2332) else Color(0xFFF5F9FF),
+            shape            = RoundedCornerShape(20.dp),
+            title = {
+                Text(
+                    text       = "Connect to WiFi Direct",
+                    fontWeight = FontWeight.Bold,
+                    fontSize   = 18.sp,
+                    color      = Color(0xFF0082C8)
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+
+                    Text(
+                        text  = "Connect your PC's WiFi to this network, then tap the button below.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (isDark) Color(0xFFB0BEC5) else Color(0xFF546E7A)
+                    )
+
+                    // SSID row
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(
+                                if (isDark) Color(0xFF0D1B2A) else Color(0xFFFFFFFF),
+                                RoundedCornerShape(10.dp)
+                            )
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        Text(
+                            text  = "Network",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (isDark) Color(0xFF78909C) else Color(0xFF90A4AE)
+                        )
+                        Text(
+                            text       = ssid,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize   = 15.sp,
+                            color      = if (isDark) Color.White else Color(0xFF1A1A2E)
+                        )
+                    }
+
+                    // Password row
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(
+                                if (isDark) Color(0xFF0D1B2A) else Color(0xFFFFFFFF),
+                                RoundedCornerShape(10.dp)
+                            )
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        Text(
+                            text  = "Password",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (isDark) Color(0xFF78909C) else Color(0xFF90A4AE)
+                        )
+                        Text(
+                            text       = passphrase,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize   = 15.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color      = if (isDark) Color.White else Color(0xFF1A1A2E)
+                        )
+                    }
+
+                    Text(
+                        text  = "The dialog will close automatically once the connection is established.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (isDark) Color(0xFF546E7A) else Color(0xFF90A4AE)
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = onConfirm,
+                    shape   = RoundedCornerShape(12.dp),
+                    colors  = ButtonDefaults.buttonColors(containerColor = Color(0xFF00C853))
+                ) {
+                    Text(
+                        text       = "Desktop is Connected",
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = onDismiss) {
+                    Text(
+                        text  = "Cancel",
+                        color = if (isDark) Color(0xFF78909C) else Color(0xFF90A4AE)
+                    )
+                }
+            }
+        )
     }
 
     @Composable

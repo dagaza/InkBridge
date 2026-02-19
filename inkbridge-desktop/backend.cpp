@@ -19,7 +19,7 @@ Backend::Backend(QObject *parent)
     : QObject(parent)
     , m_status("Ready")     
     , m_connected(false)
-    , m_wifiRunning(false)  // <--- FIX: Initialize m_wifiRunning to false
+    , m_wifiDirectRunning(false) 
     , m_pressureSensitivity(50)
     , m_minPressure(0)
     , m_swapAxis(false)
@@ -31,18 +31,30 @@ Backend::Backend(QObject *parent)
     m_stylus = new VirtualStylus(m_displayTranslator, m_pressureTranslator);
     
     
-    // --- DISABLE WIFI FOR V0.2 ---
-    // m_wifiServer = new WifiServer(this);
-    // connect(m_wifiServer, &WifiServer::clientConnected, this, [this](QString ip){
-    //     qDebug() << "UI Update: Client connected from" << ip;
-    //     updateStatus("Connected via Wi-Fi (" + ip + ")", true);
-    // });
+    m_wifiDirectServer = new WifiDirectServer(this);
 
-    // connect(m_wifiServer, &WifiServer::clientDisconnected, this, [this](){
-    //     qDebug() << "UI Update: Client disconnected";
-    //     updateStatus("Wi-Fi Listening...", false);
-    // });   
-    // -----------------------------
+    connect(m_wifiDirectServer, &WifiDirectServer::clientConnected,
+            this, [this](QString ip) {
+        updateStatus("Connected via WiFi Direct (" + ip + ")", true);
+    });
+    connect(m_wifiDirectServer, &WifiDirectServer::clientDisconnected,
+            this, [this]() {
+        updateStatus("WiFi Direct: Waiting for tablet...", false);
+    });
+    connect(m_wifiDirectServer, &WifiDirectServer::dataReceived,
+            this, &Backend::handleWifiDirectData);
+    connect(m_wifiDirectServer, &WifiDirectServer::serverError,
+            this, [this](QString msg) {
+        updateStatus("WiFi Direct Error: " + msg, false);
+        m_wifiDirectRunning = false;
+        emit wifiDirectStatusChanged();
+    });
+    connect(m_wifiDirectServer, &WifiDirectServer::statusChanged,
+            this, [this](QString msg) {
+        // Forward status messages to the UI without changing isConnected.
+        m_status = msg;
+        emit connectionStatusChanged();
+    });
 
     m_stylus->initializeStylus();
 
@@ -85,6 +97,11 @@ Backend::~Backend() {
     if (m_bluetoothServer) {
         m_bluetoothServer->stopServer();
     }
+
+    if (m_wifiDirectServer) {
+        m_wifiDirectServer->stopServer();
+    }
+
     delete m_stylus;
     delete m_displayTranslator;
     delete m_pressureTranslator;
@@ -96,7 +113,7 @@ QVariantList Backend::screenGeometries() const { return m_screenGeometriesVarian
 QString Backend::connectionStatus() const { return m_status; }
 bool Backend::isConnected() const { return m_connected; }
 QStringList Backend::usbDevices() const { return m_usbDeviceNames; }
-bool Backend::isWifiRunning() const { return m_wifiRunning; }
+bool Backend::isWifiDirectRunning() const { return m_wifiDirectRunning; }
 bool Backend::isBluetoothRunning() const { return m_bluetoothRunning; }
 int Backend::pressureSensitivity() const { return m_pressureSensitivity; }
 int Backend::minPressure() const { return m_minPressure; }
@@ -246,26 +263,22 @@ void Backend::setSwapAxis(bool swap) {
     emit settingsChanged();
 }
 
-void Backend::toggleWifi() {
-    // --- FEATURE DISABLED FOR V0.2 ---
-    return;
-    
-    /* m_wifiRunning = !m_wifiRunning;
-    
-    if (m_wifiRunning) {
-        bool started = m_wifiServer->startServer(4546, 4545);
+void Backend::toggleWifiDirect() {
+    m_wifiDirectRunning = !m_wifiDirectRunning;
+
+    if (m_wifiDirectRunning) {
+        bool started = m_wifiDirectServer->startServer();
         if (started) {
-            updateStatus("Wi-Fi Listening (Waiting for Tablet...)", false);
+            updateStatus("WiFi Direct: Waiting for Android beacon...", false);
         } else {
-            updateStatus("Wi-Fi Error: Could not bind port", false);
-            m_wifiRunning = false; 
+            m_wifiDirectRunning = false;
         }
     } else {
-        m_wifiServer->stopServer();
-        updateStatus("Wi-Fi Stopped", false);
+        m_wifiDirectServer->stopServer();
+        updateStatus("WiFi Direct Stopped", false);
     }
-    emit wifiStatusChanged();
-    */
+
+    emit wifiDirectStatusChanged();
 }
 
 void Backend::toggleBluetooth() {
@@ -287,54 +300,32 @@ void Backend::toggleBluetooth() {
     emit bluetoothStatusChanged();
 }
 
-void Backend::handleWifiData(QByteArray data) {
-    // 1. Safety Check
+void Backend::handleWifiDirectData(QByteArray data) {
     if (data.isEmpty() || !m_stylus) return;
 
-    // DEBUG: Print data size
     if (Backend::isDebugMode) {
-        qDebug() << "[WiFi] Received" << data.size() << "bytes. Hex:" << data.toHex(); 
+        qDebug() << "[P2P] Received" << data.size() << "bytes";
     }
 
-    // 2. Define the Protocol Size (22 Bytes)
-    // We use sizeof(PenPacket) to be safe, ensuring it matches protocol.h
-    const int packetSize = sizeof(PenPacket); 
-
-    // 3. Process the Buffer
-    // TCP streams can bundle multiple packets together. We loop through them.
+    const int packetSize = sizeof(PenPacket);
     int offset = 0;
+
     while (offset + packetSize <= data.size()) {
-        
-        // A. Cast the raw bytes to our packed struct
-        // We use constData() to get the raw char* pointer
-        const PenPacket* packet = reinterpret_cast<const PenPacket*>(data.constData() + offset);
+        const PenPacket *packet =
+            reinterpret_cast<const PenPacket *>(data.constData() + offset);
 
-        // B. Convert to Internal Format (AccessoryEventData)
-        // This matches the logic in accessory.cpp exactly
         AccessoryEventData eventData;
-        eventData.toolType = packet->toolType; //
-        eventData.action   = packet->action;   //
-        eventData.x        = packet->x;        //
-        eventData.y        = packet->y;        //
-        
-        // Pressure is sent as Int (0-1000) but Stylus expects Float (0.0-1.0)
-        eventData.pressure = static_cast<float>(packet->pressure) / 1000.0f; 
-        
-        eventData.tiltX    = packet->tiltX;    //
-        eventData.tiltY    = packet->tiltY;    //
+        eventData.toolType = packet->toolType;
+        eventData.action   = packet->action;
+        eventData.x        = packet->x;
+        eventData.y        = packet->y;
+        eventData.pressure = static_cast<float>(packet->pressure) / 4096.0f;
+        eventData.tiltX    = packet->tiltX;
+        eventData.tiltY    = packet->tiltY;
 
-        // C. Drive the Stylus
-        // This enters the thread-safe VirtualStylus logic
         m_stylus->handleAccessoryEventData(&eventData);
-
-        // D. Advance to the next packet
         offset += packetSize;
     }
-    
-    // Optional: If offset < data.size(), we have a partial packet (fragmentation).
-    // For a local LAN Stylus, this is rare, but a ring-buffer would solve it 100%.
-    // For this implementation, dropping the partial fragment is acceptable 
-    // because the next pen event comes in <8ms.
 }
 
 void Backend::handleBluetoothData(QByteArray data) {
