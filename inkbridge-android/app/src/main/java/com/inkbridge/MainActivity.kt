@@ -34,6 +34,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.HelpOutline
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.Cable
@@ -78,6 +80,7 @@ class MainActivity : ComponentActivity() {
     private var statusMessage by mutableStateOf("Ready to Connect")
     private var pendingAccessory: UsbAccessory? = null
     private var showTroubleshootingHint by mutableStateOf(false)
+    private var currentNightMode by mutableStateOf(AppCompatDelegate.MODE_NIGHT_YES)
 
     // Internal State
     private var wakeLock: PowerManager.WakeLock? = null
@@ -247,11 +250,12 @@ class MainActivity : ComponentActivity() {
         val prefs = getSharedPreferences("settings", Context.MODE_PRIVATE)
         val savedMode = prefs.getInt("night_mode", AppCompatDelegate.MODE_NIGHT_YES)
         AppCompatDelegate.setDefaultNightMode(savedMode)
+        currentNightMode = savedMode  // drives Compose state
 
         setContent {
-            val nightMode = AppCompatDelegate.getDefaultNightMode()
-            val isDark = nightMode != AppCompatDelegate.MODE_NIGHT_NO
-
+            // val nightMode = AppCompatDelegate.getDefaultNightMode()
+            // val isDark = nightMode != AppCompatDelegate.MODE_NIGHT_NO
+            val isDark = currentNightMode != AppCompatDelegate.MODE_NIGHT_NO
             val colorScheme = if (isDark) {
                 darkColorScheme(
                     primary     = Color(0xFFBB86FC),
@@ -604,6 +608,10 @@ class MainActivity : ComponentActivity() {
             mutableStateOf(prefs.getBoolean("first_launch", true))
         }
 
+        var isStylusOnly by remember {
+            mutableStateOf(prefs.getBoolean("stylus_only", false))
+        }
+
         var isDarkTheme by remember {
             mutableStateOf(
                 prefs.getInt("night_mode", AppCompatDelegate.MODE_NIGHT_YES) == AppCompatDelegate.MODE_NIGHT_YES
@@ -620,6 +628,22 @@ class MainActivity : ComponentActivity() {
                         .padding(16.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    // Stylus Only Toggle Button
+                    IconButton(
+                        onClick = {
+                            isStylusOnly = !isStylusOnly
+                            prefs.edit().putBoolean("stylus_only", isStylusOnly).apply()
+                        }
+                    ) {
+                        Icon(
+                            // Show a Pen if Stylus Only, Hand if Finger+Stylus allowed
+                            imageVector = if (isStylusOnly) Icons.Default.Edit else Icons.Default.TouchApp,
+                            contentDescription = if (isStylusOnly) "Stylus Only Mode" else "Touch & Stylus Mode",
+                            // Highlight in primary color when Stylus Only is active
+                            tint = if (isStylusOnly) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+                        )
+                    }
+
                     // Help / Tutorial Button
                     IconButton(onClick = { showTutorial = true }) {
                         Icon(
@@ -639,7 +663,7 @@ class MainActivity : ComponentActivity() {
                             isDarkTheme = !isDarkTheme
                             AppCompatDelegate.setDefaultNightMode(newMode)
                             prefs.edit().putInt("night_mode", newMode).apply()
-                            (context as? Activity)?.recreate()
+                            currentNightMode = newMode  // ← this triggers recomposition of setContent
                         }
                     ) {
                         Icon(
