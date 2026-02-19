@@ -257,106 +257,12 @@ ApplicationWindow {
 
                 // 3. ENHANCED ACTION BUTTONS
                 
-                // USB Connect Button with animation
-                Button {
-                    id: usbBtn
-                    visible: false // Hide for now, should be removed in future updates when auto-connection is implemented
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 48
-                    text: backend.isConnected ? "Disconnect (USB)" : "Connect (USB)"
-                    
-                    property color baseColor: backend.isConnected ? errorCol : accentCol
-                    property color hoverColor: backend.isConnected ? Qt.darker(errorCol, 1.1) : accentHoverCol
-
-                    contentItem: Text {
-                        text: parent.text
-                        font.weight: Font.DemiBold
-                        font.pixelSize: 14
-                        font.letterSpacing: 0.2
-                        color: "white"
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                    }
-                    
-                    background: Rectangle {
-                        color: parent.down ? Qt.darker(parent.baseColor, 1.2) : 
-                               (parent.hovered ? parent.hoverColor : parent.baseColor)
-                        radius: 10
-                        
-                        Behavior on color { ColorAnimation { duration: animDuration } }
-                        
-                        // Subtle shadow effect
-                        layer.enabled: true
-                        layer.effect: DropShadow {
-                            transparentBorder: true
-                            horizontalOffset: 0
-                            verticalOffset: 2
-                            radius: 8.0
-                            samples: 17
-                            color: Qt.rgba(0, 0, 0, 0.15)
-                        }
-                    }
-                    
-                    scale: down ? 0.97 : 1.0
-                    Behavior on scale { NumberAnimation { duration: 100 } }
-                    
-                    onClicked: {
-                        if (backend.isConnected) backend.disconnectDevice()
-                        else backend.connectDevice(deviceCombo.currentIndex)
-                    }
-                }
-
-                // Wi-Fi Connect Button with animation
-                Button {
-                    id: wifiBtn
-                    visible: false // Hide for now until the wi-fi beacon feature is implemented
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 48
-                    text: backend.isWifiRunning ? "Stop Wi-Fi Beacon" : "Start Wi-Fi Beacon"
-                    
-                    property color baseColor: backend.isWifiRunning ? errorCol : wifiCol
-                    property color hoverColor: backend.isWifiRunning ? Qt.darker(errorCol, 1.1) : Qt.darker(wifiCol, 1.1)
-
-                    contentItem: Text {
-                        text: parent.text
-                        font.weight: Font.DemiBold
-                        font.pixelSize: 14
-                        font.letterSpacing: 0.2
-                        color: "white"
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                    }
-                    
-                    background: Rectangle {
-                        color: parent.down ? Qt.darker(parent.baseColor, 1.2) : 
-                               (parent.hovered ? parent.hoverColor : parent.baseColor)
-                        radius: 10
-                        
-                        Behavior on color { ColorAnimation { duration: animDuration } }
-                        
-                        layer.enabled: true
-                        layer.effect: DropShadow {
-                            transparentBorder: true
-                            horizontalOffset: 0
-                            verticalOffset: 2
-                            radius: 8.0
-                            samples: 17
-                            color: Qt.rgba(0, 0, 0, 0.15)
-                        }
-                    }
-                    
-                    scale: down ? 0.97 : 1.0
-                    Behavior on scale { NumberAnimation { duration: 100 } }
-                    
-                    onClicked: backend.toggleWifi()
-                }
-
                 Button {
                     id: wifiDirectBtn
                     visible: true
                     Layout.fillWidth: true
                     Layout.preferredHeight: 48
-                    text: backend.isWifiDirectRunning ? "Stop WiFi Direct" : "Start WiFi Direct"
+                    text: backend.isWifiDirectRunning ? "Disconnect from WiFi Direct" : "Connect via WiFi Direct"
 
                     property color wdCol: "#00c853"
                     property color baseColor: backend.isWifiDirectRunning ? errorCol : wdCol
@@ -441,11 +347,43 @@ ApplicationWindow {
 
                 Item { Layout.fillHeight: true }
                 
-                // Enhanced footer
+                // ============================
+                // FOOTER WITH SUPPORT BUTTON
+                // ============================
                 ColumnLayout {
                     Layout.fillWidth: true
-                    spacing: 8
+                    spacing: 12
                     
+                    // New Support Button
+                    Button {
+                        id: supportBtn
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 36
+                        text: "Help & Support"
+                        
+                        contentItem: RowLayout {
+                            spacing: 8
+                            Item { Layout.fillWidth: true }
+                            Text {
+                                text: "Help & Support"
+                                font.pixelSize: 13
+                                font.weight: Font.Medium
+                                color: supportBtn.hovered ? accentCol : subTextCol
+                                Behavior on color { ColorAnimation { duration: 150 } }
+                            }
+                            Item { Layout.fillWidth: true }
+                        }
+                        
+                        background: Rectangle {
+                            color: supportBtn.down ? btnDownCol : (supportBtn.hovered ? btnHoverCol : "transparent")
+                            radius: 8
+                            border.color: supportBtn.hovered ? Qt.rgba(accentCol.r, accentCol.g, accentCol.b, 0.3) : "transparent"
+                            Behavior on color { ColorAnimation { duration: 150 } }
+                        }
+                        
+                        onClicked: onboarding.visible = true
+                    }
+
                     Rectangle {
                         Layout.fillWidth: true
                         height: 1
@@ -1164,5 +1102,13 @@ ApplicationWindow {
                 }
             }
         }
+    }
+        // ============================
+    // ONBOARDING COMPONENT
+    // ============================
+    OnboardingTutorial {
+        id: onboarding
+        visible: false
+        onClosed: visible = false
     }
 }

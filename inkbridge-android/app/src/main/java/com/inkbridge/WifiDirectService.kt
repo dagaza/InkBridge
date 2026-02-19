@@ -211,17 +211,27 @@ object WifiDirectService {
     // ---------------------------------------------------------------------------
 
     private fun sendBeacon(ssid: String, passphrase: String) {
-        val message       = "$BEACON_PREFIX$ssid:$passphrase".toByteArray(Charsets.UTF_8)
-        val broadcastAddr = InetAddress.getByName("255.255.255.255")
+        val message = "$BEACON_PREFIX$ssid:$passphrase".toByteArray(Charsets.UTF_8)
+        
+        // Target the specific Wi-Fi Direct subnet broadcast instead of 255.255.255.255
+        val broadcastAddr = InetAddress.getByName("192.168.49.255")
         var ds: DatagramSocket? = null
+        
         try {
-            ds = DatagramSocket()
+            // The Android Group Owner always assigns itself this IP.
+            val p2pAddress = InetAddress.getByName("192.168.49.1")
+            
+            ds = DatagramSocket(null) // Create an unbound socket first
+            ds.reuseAddress = true
+            // Bind explicitly to the P2P interface to prevent routing over the home Wi-Fi
+            ds.bind(java.net.InetSocketAddress(p2pAddress, 0)) 
             ds.broadcast = true
+            
             val deadline = System.currentTimeMillis() + 60_000L
             while (System.currentTimeMillis() < deadline && !isStreamOpen) {
                 try {
                     ds.send(DatagramPacket(message, message.size, broadcastAddr, BEACON_PORT))
-                    Log.d(TAG, "Beacon sent. SSID=$ssid")
+                    Log.d(TAG, "Beacon sent on P2P interface. SSID=$ssid")
                 } catch (e: IOException) {
                     Log.w(TAG, "Beacon send failed: ${e.message}")
                 }
@@ -242,21 +252,57 @@ object WifiDirectService {
 
     private fun scanAndConnect() {
         onStatusChanged?.invoke("WiFi Direct: Scanning for desktop on P2P network...")
-        val candidates = listOf("$P2P_SUBNET.2") + (3..20).map { "$P2P_SUBNET.$it" }
+        Log.d(TAG, "Scanning for desktop on P2P network...")
+
+        val candidates = (2..254).map { "$P2P_SUBNET.$it" }
+        
+        // Create a pool of 40 threads to scan IPs concurrently
+        val executor = java.util.concurrent.Executors.newFixedThreadPool(40)
+        var connectionSuccessful = false
+
         for (ip in candidates) {
-            if (isStreamOpen) break
-            try {
-                val testSocket = Socket()
-                testSocket.connect(java.net.InetSocketAddress(ip, DATA_PORT), 300)
-                Log.d(TAG, "Desktop found at $ip")
-                openStream(testSocket)
-                return
-            } catch (_: Exception) {}
+            executor.execute {
+                // If another thread already found the desktop, stop working
+                if (isStreamOpen || connectionSuccessful) return@execute
+                
+                var testSocket: Socket? = null
+                try {
+                    val p2pAddress = InetAddress.getByName("192.168.49.1")
+                    testSocket = Socket()
+                    testSocket.bind(java.net.InetSocketAddress(p2pAddress, 0))
+                    
+                    // Attempt connection
+                    testSocket.connect(java.net.InetSocketAddress(ip, DATA_PORT), 1000)
+                    
+                    // Lock this block so multiple threads don't trigger success at the exact same time
+                    synchronized(this) {
+                        if (!isStreamOpen && !connectionSuccessful) {
+                            Log.d(TAG, "Desktop found at $ip")
+                            connectionSuccessful = true
+                            openStream(testSocket)
+                            executor.shutdownNow() // Kill all remaining scheduled scans
+                        } else {
+                            testSocket.close() // Too late, another thread won
+                        }
+                    }
+                } catch (_: Exception) {
+                    try { testSocket?.close() } catch (_: Exception) {}
+                }
+            }
         }
-        onError?.invoke(
-            "WiFi Direct: Desktop not found. Make sure your PC WiFi is connected " +
-            "to DIRECT-IB-InkBridge and InkBridge desktop is running."
-        )
+
+        executor.shutdown()
+        // Wait up to 8 seconds maximum for all threads to finish their attempts
+        try {
+            executor.awaitTermination(8, java.util.concurrent.TimeUnit.SECONDS)
+        } catch (_: InterruptedException) { }
+
+        // If all threads finished and we still haven't connected, throw the error
+        if (!connectionSuccessful && !isStreamOpen) {
+            onError?.invoke(
+                "WiFi Direct: Desktop not found. Ensure your PC is connected to DIRECT-IB-InkBridge and the app is waiting."
+            )
+        }
     }
 
     // ---------------------------------------------------------------------------

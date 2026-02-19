@@ -58,6 +58,7 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.androidx.lifecycle.runtime.ktx)
 
+
     // --- JETPACK COMPOSE (PHASE 4) ---
     // The "Bill of Materials" (BOM) ensures all Compose libraries use compatible versions
     val composeBom = platform("androidx.compose:compose-bom:2024.02.00")

@@ -21,7 +21,7 @@ bool WifiDirectServer::startServer() {
     if (m_running) return true;
 
     m_beaconSocket = new QUdpSocket(this);
-    if (!m_beaconSocket->bind(QHostAddress::Any, BEACON_PORT, QUdpSocket::ShareAddress)) {
+    if (!m_beaconSocket->bind(QHostAddress::AnyIPv4, BEACON_PORT, QUdpSocket::ShareAddress | QUdpSocket::ReuseAddressHint)) {
         emit serverError(QString("Failed to bind UDP beacon port %1.").arg(BEACON_PORT));
         delete m_beaconSocket;
         m_beaconSocket = nullptr;

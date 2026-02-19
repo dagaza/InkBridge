@@ -38,6 +38,9 @@ InkBridge is a complete modernization of the Linux-Android drawing pipeline:
 1.  **Android App (Sender):** Written in **Kotlin**. Captures raw `MotionEvent` data, converts Tilt/Orientation radians to degrees, and streams packed binary structs via USB.
 2.  **Linux Desktop Client (Receiver):** Written in **C++20** with **Qt/QML**. Claims the USB device, decodes the stream, and injects events into the Linux kernel via `uinput`.
 
+### Why Wi-Fi Direct instead of standard Wi-Fi?
+Connecting Android to Linux over a standard home network is notoriously unreliable. Different Linux distributions (Ubuntu vs. Fedora vs. Arch) handle firewalls (ufw, firewalld, iptables) and hotspot configurations differently. To prevent users from having to debug their local router and firewall settings, InkBridge uses Wi-Fi Direct. Android creates the network and acts as the TCP Server, while the Linux client connects *outbound*, naturally bypassing strict Linux inbound firewalls.
+
 ## 🚀 Installation & Build
 
 ### **Option 1: The Quick Way (Recommended)**
@@ -98,10 +101,25 @@ To allow InkBridge to create a virtual tablet device without running as root (su
 ## 🎮 Usage
 
 1.  **Install the Android App** on your tablet/phone.
-2.  **Launch InkBridge** on your Linux desktop.
-3.  Connect your Android device via USB.
-4.  Accept the "Open with InkBridge" prompt on your Android device.
-5.  **Success!** The status bar in the desktop app will turn Green/Connected.
+2.  **Install the desktop App** on your Linux desktop.
+3.  Choose your connection method:
+
+### Via USB (Recommended for 0ms Latency):
+* Connect your device via USB
+* Accept the *"Open with InkBridge"* prompt on your Android device (confirmation window will appear when plugging in the USB cable)
+* Start drawing
+
+### Via Wi-Fi Direct (Recommended Wireless):
+* Press Connect via *Wi-Fi Direct* on the desktop app
+* Tap Connect via *Wi-Fi Direct* on the Android app (a pop-up with instructions will appear)
+* Connect your PC to the DIRECT-IB-INKBRIDGE Wi-Fi Network using the provided password
+* Tap *"Desktop is Connected"* on the Android app (inside the pop-up) to initiate the stream
+* *Note: Your PC will disconnect from your current Wi-Fi connection. It is highly recommended to use an Ethernet connection for your PC if you need internet access while drawing.*
+
+### Via Bluetooth (Backup Option):
+* Pair your tablet and PC in your system Bluetooth settings
+* Tap *"Connect via Bluetooth"* in the Android app and select your PC in the discovered devices list.
+
 
 ### Advanced Controls
 * **Pressure Sensitivity:** Adjusts the logarithmic curve. Higher values make it easier to reach 100% pressure.
@@ -120,6 +138,9 @@ This happens if the Linux kernel (`cdc_acm` or `usbfs`) grabs the Android device
 **Tilt is inverted**
 * *Fix:* Check the "Fix Rotation (Swap X/Y)" checkbox in the Advanced Settings if you are using the tablet in a different orientation than the PC screen.
 
+**Bluetooth feels a bit laggy or "floaty"**
+* Fix: This is unfortunately an unavoidable hardware limitation. Standard Bluetooth mice use the HID profile (7-15ms latency), which operates at the hardware controller level. InkBridge must use the SPP/RFCOMM profile (30-80ms with 150ms spikes) because Android does not expose HID for custom data streams. The delay happens inside Android's internal radio scheduler, not the app. If you need lower latency, switch to Wi-Fi Direct or USB.
+
 ## ❤️ Acknowledgments & Credits
 
 This project was originally inspired by the "Android Virtual Pen" application.
@@ -129,7 +150,9 @@ While the original project is no longer maintained/deprecated, it served as the 
 * **Refactored Android App:** Complete rewrite from Java to **Kotlin**, optimizing the event loop and sensor data processing.
 * **Refactored Desktop Client:** Complete rewrite from legacy C++ to **C++20**, improving memory safety and concurrency.
 * **Modern UI:** Replaced the archaic GTK/X11 interface with a fluid, hardware-accelerated **Qt Quick (QML)** interface.
-* **New Features:** Added support for **Multi-Monitor Mapping**, **3D Tilt** (Tilt X/Y), and **Eraser Button** support (Linux Kernel Tool Switching).
+* **New In-App Features:** Added support for **Multi-Monitor Mapping**, **3D Tilt** (Tilt X/Y), and **Eraser Button** support (Linux Kernel Tool Switching).
+* **New Connectivity Features:** Beyond vastly improving the over-USB experience, we have also added full **Bluetooth** and **Wi-Fi Direct (P2P)** support.
+
 
 ## 📄 License
 

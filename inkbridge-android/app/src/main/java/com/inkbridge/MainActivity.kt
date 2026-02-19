@@ -33,6 +33,8 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.HelpOutline
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.Cable
 import androidx.compose.material.icons.filled.Usb
@@ -591,10 +593,17 @@ class MainActivity : ComponentActivity() {
         status: String,
         onConnectRequested: (method: String, ip: String, port: String) -> Unit
     ) {
-        var showWifiDialog by remember { mutableStateOf(false) }
-
         val context = LocalContext.current
         val prefs = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+
+        // --- Logic Variables ---
+        var showWifiDialog by remember { mutableStateOf(false) }
+        
+        // Check if it's the first launch
+        var showTutorial by remember {
+            mutableStateOf(prefs.getBoolean("first_launch", true))
+        }
+
         var isDarkTheme by remember {
             mutableStateOf(
                 prefs.getInt("night_mode", AppCompatDelegate.MODE_NIGHT_YES) == AppCompatDelegate.MODE_NIGHT_YES
@@ -604,30 +613,44 @@ class MainActivity : ComponentActivity() {
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Box(modifier = Modifier.fillMaxSize()) {
 
-                // ---- THEME TOGGLE (top-right corner) ----
-                IconButton(
-                    onClick = {
-                        val newMode = if (isDarkTheme)
-                            AppCompatDelegate.MODE_NIGHT_NO
-                        else
-                            AppCompatDelegate.MODE_NIGHT_YES
-                        isDarkTheme = !isDarkTheme
-                        AppCompatDelegate.setDefaultNightMode(newMode)
-                        prefs.edit().putInt("night_mode", newMode).apply()
-                        (context as? Activity)?.recreate()
-                    },
+                // ---- TOP RIGHT CORNER BUTTONS ----
+                Row(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
-                        .padding(16.dp)
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(
-                        imageVector = if (isDarkTheme) Icons.Default.LightMode else Icons.Default.DarkMode,
-                        contentDescription = if (isDarkTheme) "Switch to light mode" else "Switch to dark mode",
-                        tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
-                    )
-                }
-                // -----------------------------------------
+                    // Help / Tutorial Button
+                    IconButton(onClick = { showTutorial = true }) {
+                        Icon(
+                            imageVector = Icons.Default.Info,
+                            contentDescription = "Show Tutorial",
+                            tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+                        )
+                    }
 
+                    // Theme Toggle Button
+                    IconButton(
+                        onClick = {
+                            val newMode = if (isDarkTheme)
+                                AppCompatDelegate.MODE_NIGHT_NO
+                            else
+                                AppCompatDelegate.MODE_NIGHT_YES
+                            isDarkTheme = !isDarkTheme
+                            AppCompatDelegate.setDefaultNightMode(newMode)
+                            prefs.edit().putInt("night_mode", newMode).apply()
+                            (context as? Activity)?.recreate()
+                        }
+                    ) {
+                        Icon(
+                            imageVector = if (isDarkTheme) Icons.Default.LightMode else Icons.Default.DarkMode,
+                            contentDescription = if (isDarkTheme) "Switch to light mode" else "Switch to dark mode",
+                            tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+                        )
+                    }
+                }
+
+                // ---- MAIN DASHBOARD CONTENT ----
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
@@ -637,7 +660,6 @@ class MainActivity : ComponentActivity() {
                 ) {
                     Spacer(modifier = Modifier.weight(2f))
 
-                    // Logo / wordmark
                     Image(
                         painter = painterResource(id = R.drawable.ic_wordmark),
                         contentDescription = "InkBridge Logo",
@@ -653,9 +675,7 @@ class MainActivity : ComponentActivity() {
                     if (showTroubleshootingHint) {
                         Spacer(modifier = Modifier.height(16.dp))
                         Card(
-                            colors = CardDefaults.cardColors(
-                                containerColor = Color(0xFF332200)
-                            ),
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFF332200)),
                             modifier = Modifier.padding(horizontal = 16.dp)
                         ) {
                             Text(
@@ -670,20 +690,10 @@ class MainActivity : ComponentActivity() {
 
                     Spacer(modifier = Modifier.height(48.dp))
 
-                    // USB button — gradient style
                     GradientConnectButton(
                         text = "Connect via USB",
                         icon = Icons.Default.Usb,
                         onClick = { onConnectRequested("USB", "", "") }
-                    )
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    // Bluetooth button — same gradient style
-                    GradientConnectButton(
-                        text = "Connect via Bluetooth",
-                        icon = Icons.Default.Bluetooth,
-                        onClick = { findAndConnectBluetooth() }
                     )
 
                     Spacer(modifier = Modifier.height(16.dp))
@@ -693,18 +703,20 @@ class MainActivity : ComponentActivity() {
                         onClick = { findAndConnectWifiDirect() }
                     )
 
+                    Spacer(modifier = Modifier.height(16.dp))
+                    GradientConnectButton(
+                        text = "Connect via Bluetooth",
+                        icon = Icons.Default.Bluetooth,
+                        onClick = { findAndConnectBluetooth() }
+                    )
+                    
                     Spacer(modifier = Modifier.weight(1f))
 
                     OutlinedButton(
                         onClick = { exitApp() },
                         modifier = Modifier.widthIn(min = 200.dp),
-                        colors = ButtonDefaults.outlinedButtonColors(
-                            contentColor = Color(0xFFCF6679)
-                        ),
-                        border = androidx.compose.foundation.BorderStroke(
-                            1.dp,
-                            Color(0xFFCF6679).copy(alpha = 0.5f)
-                        )
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFCF6679)),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFCF6679).copy(alpha = 0.5f))
                     ) {
                         Text("Exit Application")
                     }
@@ -712,7 +724,17 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // Bluetooth picker dialog — outside the Surface but inside the composable
+        // --- DIALOGS (MUST BE INSIDE THE FUNCTION SCOPE) ---
+
+        if (showTutorial) {
+            OnboardingTutorialDialog(
+                onDismiss = {
+                    showTutorial = false
+                    prefs.edit().putBoolean("first_launch", false).apply()
+                }
+            )
+        }
+
         if (showBluetoothPicker) {
             val rootView = LocalView.current
             BluetoothDevicePickerDialog(
@@ -729,7 +751,6 @@ class MainActivity : ComponentActivity() {
             )
         }
 
-        // WiFi Direct credentials dialog  ← ADD THIS BLOCK
         if (showWifiDirectDialog) {
             WifiDirectCredentialsDialog(
                 ssid       = wifiDirectSsid,
@@ -738,6 +759,16 @@ class MainActivity : ComponentActivity() {
                 onDismiss  = {
                     showWifiDirectDialog = false
                     WifiDirectService.closeStream()
+                }
+            )
+        }
+
+        if (showWifiDialog) {
+            WifiConnectDialog(
+                onDismiss = { showWifiDialog = false },
+                onConnect = { ip, port ->
+                    showWifiDialog = false
+                    onConnectRequested("WIFI_MANUAL", ip, port)
                 }
             )
         }

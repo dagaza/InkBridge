@@ -3,5 +3,6 @@
     <qresource prefix="/">
         <file>assets/inkbridge.png</file>
         <file>assets/inkbridge_wordmark.svg</file>
+        <file>OnboardingTutorial.qml</file>
         <file>Main.qml</file>  </qresource>
 </RCC>
