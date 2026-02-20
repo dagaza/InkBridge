@@ -31,7 +31,7 @@ object WifiDirectService {
     private const val BEACON_PREFIX      = "INKBRIDGE_P2P:"
     private const val P2P_SUBNET         = "192.168.49"
     private const val MAX_QUEUE_SIZE     = 12
-    private const val PACKET_SIZE        = 22
+    private const val PACKET_SIZE        = 23
     private const val OUTPUT_BUFFER_SIZE = PACKET_SIZE * 16
 
     private var socket: Socket? = null
@@ -48,8 +48,8 @@ object WifiDirectService {
     // --- Callbacks ---
     var onStatusChanged: ((String) -> Unit)? = null
     var onConnected: (() -> Unit)? = null
+    var onDisconnected: (() -> Unit)? = null
     var onError: ((String) -> Unit)? = null
-    // Delivers SSID + passphrase to the UI for display to the user
     var onCredentialsReady: ((ssid: String, passphrase: String) -> Unit)? = null
 
     // ---------------------------------------------------------------------------
@@ -81,10 +81,6 @@ object WifiDirectService {
         })
     }
 
-    /**
-     * Call this when the user taps "Desktop is Connected" on Android.
-     * Stops the beacon loop and immediately scans for the desktop TCP server.
-     */
     fun userConfirmedDesktopConnected() {
         beaconThread?.interrupt()
         Thread {
@@ -104,6 +100,7 @@ object WifiDirectService {
     }
 
     fun closeStream() {
+        onDisconnected = null  // prevent callback firing on deliberate disconnect
         isStreamOpen = false
         beaconThread?.interrupt()
         beaconThread = null
@@ -188,13 +185,11 @@ object WifiDirectService {
 
                 Log.d(TAG, "P2P group ready. SSID=$ssid")
 
-                // Show credentials to user so they can connect the desktop manually
                 onCredentialsReady?.invoke(ssid, passphrase)
                 onStatusChanged?.invoke(
                     "Connect your PC WiFi to the network shown above, then tap 'Desktop is Connected'."
                 )
 
-                // Also send beacon so desktop can open TCP server and show instructions
                 beaconThread = Thread {
                     sendBeacon(ssid, passphrase)
                 }.apply {
@@ -204,32 +199,23 @@ object WifiDirectService {
             })
         }
 
-        // 1 second delay before first attempt — group needs time to fully initialise
         Handler(Looper.getMainLooper()).postDelayed({ tryFetch() }, 1000)
     }
 
     // ---------------------------------------------------------------------------
-    // Step 3: UDP beacon to desktop on regular WiFi broadcast
-    // Resent every 2s for up to 60s. Desktop uses this to open its TCP server.
+    // Step 3: UDP beacon
     // ---------------------------------------------------------------------------
 
     private fun sendBeacon(ssid: String, passphrase: String) {
         val message = "$BEACON_PREFIX$ssid:$passphrase".toByteArray(Charsets.UTF_8)
-        
-        // Target the specific Wi-Fi Direct subnet broadcast instead of 255.255.255.255
         val broadcastAddr = InetAddress.getByName("192.168.49.255")
         var ds: DatagramSocket? = null
-        
         try {
-            // The Android Group Owner always assigns itself this IP.
             val p2pAddress = InetAddress.getByName("192.168.49.1")
-            
-            ds = DatagramSocket(null) // Create an unbound socket first
+            ds = DatagramSocket(null)
             ds.reuseAddress = true
-            // Bind explicitly to the P2P interface to prevent routing over the home Wi-Fi
-            ds.bind(java.net.InetSocketAddress(p2pAddress, 0)) 
+            ds.bind(java.net.InetSocketAddress(p2pAddress, 0))
             ds.broadcast = true
-            
             val deadline = System.currentTimeMillis() + 60_000L
             while (System.currentTimeMillis() < deadline && !isStreamOpen) {
                 try {
@@ -258,34 +244,26 @@ object WifiDirectService {
         Log.d(TAG, "Scanning for desktop on P2P network...")
 
         val candidates = (2..254).map { "$P2P_SUBNET.$it" }
-        
-        // Create a pool of 40 threads to scan IPs concurrently
         val executor = java.util.concurrent.Executors.newFixedThreadPool(40)
         var connectionSuccessful = false
 
         for (ip in candidates) {
             executor.execute {
-                // If another thread already found the desktop, stop working
                 if (isStreamOpen || connectionSuccessful) return@execute
-                
                 var testSocket: Socket? = null
                 try {
                     val p2pAddress = InetAddress.getByName("192.168.49.1")
                     testSocket = Socket()
                     testSocket.bind(java.net.InetSocketAddress(p2pAddress, 0))
-                    
-                    // Attempt connection
                     testSocket.connect(java.net.InetSocketAddress(ip, DATA_PORT), 1000)
-                    
-                    // Lock this block so multiple threads don't trigger success at the exact same time
                     synchronized(this) {
                         if (!isStreamOpen && !connectionSuccessful) {
                             Log.d(TAG, "Desktop found at $ip")
                             connectionSuccessful = true
                             openStream(testSocket)
-                            executor.shutdownNow() // Kill all remaining scheduled scans
+                            executor.shutdownNow()
                         } else {
-                            testSocket.close() // Too late, another thread won
+                            testSocket.close()
                         }
                     }
                 } catch (_: Exception) {
@@ -295,12 +273,10 @@ object WifiDirectService {
         }
 
         executor.shutdown()
-        // Wait up to 8 seconds maximum for all threads to finish their attempts
         try {
             executor.awaitTermination(8, java.util.concurrent.TimeUnit.SECONDS)
         } catch (_: InterruptedException) { }
 
-        // If all threads finished and we still haven't connected, throw the error
         if (!connectionSuccessful && !isStreamOpen) {
             onError?.invoke(
                 "WiFi Direct: Desktop not found. Ensure your PC is connected to DIRECT-IB-InkBridge and the app is waiting."
@@ -325,9 +301,9 @@ object WifiDirectService {
         }
         val queueWrapper = object : OutputStream() {
             override fun write(b: Int) {}
-            override fun write(b: ByteArray) { queue.offer(Arrays.copyOf(b, b.size)) }
+            override fun write(b: ByteArray) = write(b, 0, b.size)
             override fun write(b: ByteArray, off: Int, len: Int) {
-                queue.offer(Arrays.copyOfRange(b, off, off + len))
+                queue.offer(b.copyOfRange(off, off + len))
             }
         }
         val stylusOnly = appContext?.getSharedPreferences("settings", Context.MODE_PRIVATE)
@@ -338,10 +314,11 @@ object WifiDirectService {
     }
 
     // ---------------------------------------------------------------------------
-    // Write loop — batched, identical to BluetoothStreamService
+    // Write loop
     // ---------------------------------------------------------------------------
 
     private fun writeLoop(stream: BufferedOutputStream) {
+        val heartbeat   = byteArrayOf(0x03.toByte(), 0x00.toByte(), 0x00.toByte())
         val batchBuffer = ByteArrayOutputStream(OUTPUT_BUFFER_SIZE)
         val drainBatch  = ArrayList<ByteArray>(MAX_QUEUE_SIZE)
         while (isStreamOpen) {
@@ -355,6 +332,9 @@ object WifiDirectService {
                     for (packet in drainBatch) batchBuffer.write(packet)
                     stream.write(batchBuffer.toByteArray())
                     stream.flush()
+                } else {
+                    stream.write(heartbeat)
+                    stream.flush()
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "P2P write loop error: ${e.message}")
@@ -363,5 +343,8 @@ object WifiDirectService {
             }
         }
         try { stream.close() } catch (_: Exception) {}
+        onDisconnected?.let { callback ->
+            Handler(Looper.getMainLooper()).post { callback() }
+        }
     }
 }

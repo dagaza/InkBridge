@@ -58,6 +58,9 @@ fun OnboardingTutorialDialog(
         },
         TutorialPage("Pen Physics", Icons.Default.Edit) {
             Text("Pressure Sensitivity:\nAdjusts the curve of your strokes. Higher values mean you must press harder to reach maximum thickness.\n\nMinimum Pressure (Deadzone):\nCreates a baseline threshold. If you experience 'ghost strokes' while hovering, increase this slightly to ignore light touches.\n\nThe Eraser:\nInkBridge uses a 'Clean Handover' protocol. If your stylus has a side button, you can confidently switch to the eraser mid-hover. \n\nFinger or Stylus:\nYou can select stylus input-only from the Android app's main menu to ensure touching the screen with your hand while drawing won't cause any unwanted input. You can also select finger input if that's your preferred input method.", color = textColor)
+        },
+        TutorialPage("Canvas Gestures", Icons.Default.TouchApp) {
+            Text("Two-Finger Pan & Zoom:\nYou can navigate your canvas on the Linux machine completely natively! Simply use two fingers to smoothly pan, zoom, and navigate around your workspace just like a native mobile app.\n\nSmart Palm Rejection:\nThese multi-touch gestures work perfectly even if you have 'Stylus Only' mode turned on from the main menu. InkBridge intelligently ignores accidental single-finger palm rests, but instantly recognizes intentional two-finger canvas navigation.", color = textColor)
         }
     )
 

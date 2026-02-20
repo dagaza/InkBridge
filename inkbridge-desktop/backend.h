@@ -100,6 +100,7 @@ private:
     bool m_connected;
     bool m_wifiDirectRunning;
     bool m_bluetoothRunning;
+    bool m_screenSelected;
     bool trySwitchToAccessoryMode(libusb_device *dev, libusb_device_handle *handle);
     
     int m_pressureSensitivity;
@@ -109,6 +110,12 @@ private:
     void updateStatus(QString msg, bool connected);
     void handleWifiDirectData(QByteArray data);
     void handleBluetoothData(QByteArray data);
+
+    // Carry-over buffers for partial packets that arrive split across two
+    // consecutive readyRead signals. Each transport has its own buffer so
+    // they never interfere with each other.
+    QByteArray m_wifiLeftover;
+    QByteArray m_btLeftover;
 
     // --- NEW: Auto-Connect Private Members ---
     std::atomic<bool> m_autoScanRunning;

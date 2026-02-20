@@ -1,5 +1,6 @@
 #ifndef VIRTUALSTYLUS_H
 #define VIRTUALSTYLUS_H
+
 #include <QObject>
 #include <QScreen>
 #include <QRect>
@@ -9,27 +10,33 @@
 #include "accessory.h"
 #include "displayscreentranslator.h"
 #include "pressuretranslator.h"
+#include "protocol.h"   // TouchFingerSlot, MT_MAX_SLOTS
 
 class Error; // Forward declaration — full type only needed in .cpp
 
-// We inherit from QObject for parent-child memory management,
-// but we now use std::thread for the watchdog to avoid QTimer threading issues.
 class VirtualStylus : public QObject
 {
     Q_OBJECT
 public:
-    // Constructor
-    explicit VirtualStylus(DisplayScreenTranslator * accessoryScreen,
-                           PressureTranslator *pressureTranslator,
-                           QObject *parent = nullptr);
-    // Destructor (Required to stop the thread safely)
+    explicit VirtualStylus(DisplayScreenTranslator* accessoryScreen,
+                           PressureTranslator*      pressureTranslator,
+                           QObject*                 parent = nullptr);
     ~VirtualStylus();
 
-    void handleAccessoryEventData(AccessoryEventData * accessoryEventData);
+    // Called by the USB/WiFi/Bluetooth receive loops for stylus events.
+    void handleAccessoryEventData(AccessoryEventData* accessoryEventData);
+
+    // Called by the receive loops for multi-touch finger events.
+    // slots     : array of TouchFingerSlot describing all active/lifted fingers.
+    // slotCount : number of valid entries in slots (1–MT_MAX_SLOTS).
+    void handleTouchPacket(const TouchFingerSlot* fingerSlots, int slotCount);
+
     void initializeStylus();
+    void initializeMTDevice();   // Exposed for testing; normally called lazily on first touch packet
+    void destroyMTDevice();      // Call when a client disconnects
     void destroyStylus();
 
-    // --- GEOMETRY SETTERS ---
+    // Geometry setters — applied to both stylus and MT coordinate mapping.
     void setTargetScreen(QRect geometry);
     void setTotalDesktopGeometry(QRect geometry);
     void setInputResolution(int width, int height);
@@ -37,34 +44,64 @@ public:
     bool swapAxis = false;
 
 private:
-    int fd;
+    // -------------------------------------------------------------------------
+    // FILE DESCRIPTORS
+    // -------------------------------------------------------------------------
+    int m_stylusFd = -1;   // uinput fd for the stylus device  (was 'fd')
+    int m_mtFd     = -1;   // uinput fd for the MT touch device (new)
 
-    // --- THREADING & WATCHDOG ---
-    // We use a mutex to ensure the 'Watchdog Thread' and 'USB Thread'
-    // don't try to write to the file descriptor (fd) at the exact same time.
+    // -------------------------------------------------------------------------
+    // THREADING & WATCHDOG
+    // -------------------------------------------------------------------------
     std::mutex            m_mutex;
     std::thread           m_watchdogThread;
     std::atomic<bool>     m_watchdogRunning;
-    std::atomic<int64_t>  m_lastEventTime; // Stores time in nanoseconds
+    std::atomic<int64_t>  m_lastEventTime;  // nanoseconds, updated each pen event
 
-    bool isPenActive = false; // Protected by m_mutex
-    int  m_activeTool = -1;   // -1 = None, 1 = Pen, 2 = Eraser; protected by m_mutex
+    void watchdogLoop();
+    void performWatchdogReset();
 
-    void watchdogLoop();         // Background loop checking for timeouts
-    void performWatchdogReset(); // Logic to force-lift the pen on timeout
+    // -------------------------------------------------------------------------
+    // STYLUS STATE (protected by m_mutex)
+    // -------------------------------------------------------------------------
+    bool m_isPenActive = false;
+    int  m_activeTool  = -1;  // -1=none, 1=pen, 2=eraser
 
-    // --- TOOL SWAP HELPERS ---
-    // These implement the kernel-mandated three-phase proximity protocol.
-    // Must be called with m_mutex already held.
-    void sendProximityOut(Error* err); // Phase 1: de-assert old tool, sync
-    void sendProximityIn(int tool, Error* err); // Phase 2: assert new tool, sync
+    void sendProximityOut(Error* err);
+    void sendProximityIn(int tool, Error* err);
 
-    DisplayScreenTranslator * displayScreenTranslator;
-    PressureTranslator      * pressureTranslator;
+    // -------------------------------------------------------------------------
+    // MT STATE (protected by m_mutex)
+    //
+    // m_slotTrackingId[i]: the tracking ID currently assigned to slot i.
+    //   -1  means the slot is inactive (no finger in that slot).
+    //   ≥0  means a finger is present; the value is the unique tracking ID
+    //       we handed to the kernel for this contact.
+    //
+    // m_nextTrackingId: monotonically increasing counter. Each new finger
+    //   contact gets a fresh ID so the kernel never confuses a new touch with
+    //   a residual one from the previous gesture.
+    // -------------------------------------------------------------------------
+    int m_slotTrackingId[MT_MAX_SLOTS];  // initialised to -1 in constructor
+    int m_nextTrackingId = 0;
 
-    void displayEventDebugInfo(AccessoryEventData * accessoryEventData);
+    // Translates a normalised 0–32767 coordinate from the TouchPacket into the
+    // absolute value the MT device should emit, applying the same screen-geometry
+    // mapping used for stylus events.
+    int32_t normToMtX(int32_t normX) const;
+    int32_t normToMtY(int32_t normY) const;
 
-    // --- VARIABLES ---
+    // -------------------------------------------------------------------------
+    // DEPENDENCIES
+    // -------------------------------------------------------------------------
+    DisplayScreenTranslator* displayScreenTranslator;
+    PressureTranslator*      pressureTranslator;
+
+    void displayEventDebugInfo(AccessoryEventData* accessoryEventData);
+
+    // -------------------------------------------------------------------------
+    // GEOMETRY
+    // -------------------------------------------------------------------------
     QRect targetScreenGeometry;
     QRect totalDesktopGeometry;
     int   inputWidth  = 0;

@@ -8,7 +8,6 @@ import android.util.Log
 import android.view.View
 import java.io.FileDescriptor
 import java.io.FileOutputStream
-import java.io.IOException
 import java.io.OutputStream
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
@@ -22,8 +21,7 @@ object UsbStreamService {
 
     @Volatile private var isStreamOpen = false
     private var currentListener: TouchListener? = null
-
-    private const val HEARTBEAT_PACKET_SIZE = 22
+    var onDisconnected: (() -> Unit)? = null
 
     fun updateView(view: View) {
         if (currentListener != null) {
@@ -33,10 +31,6 @@ object UsbStreamService {
         }
     }
 
-    /**
-     * BLOCKING call to open the stream.
-     * Call this from a background thread (Dispatchers.IO).
-     */
     fun connect(usbManager: UsbManager, accessory: UsbAccessory, context: Context): Boolean {
         if (isStreamOpen) {
             closeStream()
@@ -64,15 +58,16 @@ object UsbStreamService {
             }
 
             val queueWrapper = object : OutputStream() {
-                override fun write(b: Int) { /* Unused */ }
-                override fun write(b: ByteArray) {
-                    if (!queue.offer(b)) {
-                        // Queue full, packet dropped (backpressure)
+                override fun write(b: Int) { /* single-byte write unused */ }
+                override fun write(b: ByteArray) = write(b, 0, b.size)
+                override fun write(b: ByteArray, off: Int, len: Int) {
+                    val copy = b.copyOfRange(off, off + len)
+                    if (!queue.offer(copy)) {
+                        Log.w(TAG, "USB queue full, packet dropped")
                     }
                 }
             }
 
-            // Read preference once at connection time — not per-event
             val stylusOnly = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
                 .getBoolean("stylus_only", false)
             currentListener = TouchListener(queueWrapper, stylusOnly)
@@ -88,12 +83,11 @@ object UsbStreamService {
     }
 
     private fun writeLoop(stream: FileOutputStream) {
-        val heartbeat = ByteArray(HEARTBEAT_PACKET_SIZE) { 127.toByte() }
+        val heartbeat = byteArrayOf(0x03.toByte(), 0x00.toByte(), 0x00.toByte())
 
         while (isStreamOpen) {
             try {
                 val packet = queue.poll(500, TimeUnit.MILLISECONDS)
-
                 if (packet != null) {
                     stream.write(packet)
                 } else {
@@ -107,10 +101,14 @@ object UsbStreamService {
         }
 
         try { stream.close() } catch (e: Exception) {}
+        onDisconnected?.let { callback ->
+            android.os.Handler(android.os.Looper.getMainLooper()).post { callback() }
+        }
     }
 
     fun closeStream() {
         Log.d(TAG, "Closing Stream...")
+        onDisconnected = null  // prevent callback on deliberate disconnect
         isStreamOpen = false
         try {
             workerThread?.interrupt()
@@ -120,9 +118,7 @@ object UsbStreamService {
         workerThread = null
         currentListener = null
 
-        try {
-            fileDescriptor?.close()
-        } catch (e: Exception) {}
+        try { fileDescriptor?.close() } catch (e: Exception) {}
         fileDescriptor = null
         queue.clear()
         Log.d(TAG, "Stream Closed.")

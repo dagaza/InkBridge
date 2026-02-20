@@ -23,6 +23,7 @@ Engineered for near-zero latency and professional-grade control, InkBridge offer
 ## ✨ Key Features
 
 * **Universal Input:** Supports S-Pen (Pressure/Tilt), capacitive styluses, and multi-touch finger input.
+* **Native Canvas Gestures:** Seamlessly pan, zoom, and navigate your Linux workspace using true two-finger multi-touch (powered by Linux Protocol B).
 * **USB Wired Connection:** Uses the **Android Open Accessory (AOA)** protocol for near-zero latency input.
 * **Professional-Grade Input Support:**
     * **Logarithmic Pressure Curve:** Custom-tuned math for natural, responsive strokes (4096 levels).

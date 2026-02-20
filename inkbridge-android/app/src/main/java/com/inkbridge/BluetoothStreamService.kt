@@ -20,8 +20,8 @@ object BluetoothStreamService {
     private const val TAG = "InkBridgeBtService"
     private const val DEBUG = false
     private val SPP_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
-    private const val PACKET_SIZE = 22
-    private val HEARTBEAT = ByteArray(PACKET_SIZE) { 127.toByte() }
+    private const val PACKET_SIZE = 23
+    private val HEARTBEAT = byteArrayOf(0x03.toByte(), 0x00.toByte(), 0x00.toByte())
     private const val OUTPUT_BUFFER_SIZE = PACKET_SIZE * 16
     private const val MAX_QUEUE_SIZE = 12
 
@@ -30,6 +30,7 @@ object BluetoothStreamService {
     private val queue = LinkedBlockingQueue<ByteArray>(MAX_QUEUE_SIZE)
     @Volatile private var isStreamOpen = false
     private var currentListener: TouchListener? = null
+    var onDisconnected: (() -> Unit)? = null
 
     fun updateView(view: View) {
         currentListener?.let {
@@ -66,8 +67,9 @@ object BluetoothStreamService {
 
             val queueWrapper = object : OutputStream() {
                 override fun write(b: Int) { /* unused */ }
-                override fun write(b: ByteArray) {
-                    queue.offer(b)
+                override fun write(b: ByteArray) = write(b, 0, b.size)
+                override fun write(b: ByteArray, off: Int, len: Int) {
+                    queue.offer(b.copyOfRange(off, off + len))
                 }
             }
 
@@ -88,6 +90,7 @@ object BluetoothStreamService {
 
     fun closeStream() {
         Log.d(TAG, "Closing Bluetooth stream...")
+        onDisconnected = null  // prevent callback firing on deliberate disconnect
         isStreamOpen = false
 
         try {
@@ -172,5 +175,8 @@ object BluetoothStreamService {
         }
 
         try { stream.close() } catch (_: Exception) {}
+        onDisconnected?.let { callback ->
+            android.os.Handler(android.os.Looper.getMainLooper()).post { callback() }
+        }
     }
 }

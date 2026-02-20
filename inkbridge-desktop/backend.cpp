@@ -2,8 +2,9 @@
 #include "linux-adk.h"
 #include <libusb-1.0/libusb.h>
 #include <iostream> // For std::cout if needed, though qDebug is preferred for Qt
-#include "protocol.h"  // For PenPacket struct
-#include "accessory.h" // For AccessoryEventData struct
+#include "protocol.h"       // For PenPacket struct
+#include "accessory.h"      // For AccessoryEventData struct
+#include "packetdispatch.h" // For dispatchPacketBuffer() — shared framed-protocol parser
 // AOA Protocol Constants
 #define AOA_GET_PROTOCOL    51
 #define AOA_SEND_STRING     52
@@ -25,6 +26,7 @@ Backend::Backend(QObject *parent)
     , m_swapAxis(false)
     , m_autoScanRunning(false) // Initialize flag
     , m_bluetoothRunning(false)
+    , m_screenSelected(false)
 {
     m_displayTranslator = new DisplayScreenTranslator();
     m_pressureTranslator = new PressureTranslator();
@@ -35,10 +37,14 @@ Backend::Backend(QObject *parent)
 
     connect(m_wifiDirectServer, &WifiDirectServer::clientConnected,
             this, [this](QString ip) {
+        m_stylus->initializeMTDevice();
+        if (!m_screenSelected && !m_screenRects.isEmpty())
+            selectScreen(0);
         updateStatus("Connected via WiFi Direct (" + ip + ")", true);
     });
     connect(m_wifiDirectServer, &WifiDirectServer::clientDisconnected,
             this, [this]() {
+        m_stylus->destroyMTDevice();
         updateStatus("WiFi Direct: Waiting for tablet...", false);
     });
     connect(m_wifiDirectServer, &WifiDirectServer::dataReceived,
@@ -63,12 +69,16 @@ Backend::Backend(QObject *parent)
     connect(m_bluetoothServer, &BluetoothServer::clientConnected,
             this, [this](QString address) {
         qDebug() << "[BT] Client connected from" << address;
+        m_stylus->initializeMTDevice();
+        if (!m_screenSelected && !m_screenRects.isEmpty())
+            selectScreen(0);
         updateStatus("Connected via Bluetooth (" + address + ")", true);
     });
 
     connect(m_bluetoothServer, &BluetoothServer::clientDisconnected,
             this, [this]() {
         qDebug() << "[BT] Client disconnected";
+        m_stylus->destroyMTDevice();
         updateStatus("Bluetooth Listening...", false);
     });
 
@@ -151,18 +161,12 @@ void Backend::refreshScreens() {
     }
     m_stylus->setTotalDesktopGeometry(totalRect);
     emit screenListChanged();
-
-    // --- ADD THIS BLOCK HERE ---
-    // Force the stylus to map to the first screen immediately
-    if (!m_screenRects.isEmpty()) {
-        selectScreen(0); 
-    }
-    // ---------------------------
 }
 
 void Backend::selectScreen(int index) {
     if (index >= 0 && index < m_screenRects.size()) {
         m_stylus->setTargetScreen(m_screenRects[index]);
+        m_screenSelected = true;
         qDebug() << "Selected Screen Index:" << index;
     }
 }
@@ -303,70 +307,72 @@ void Backend::toggleBluetooth() {
 void Backend::handleWifiDirectData(QByteArray data) {
     if (data.isEmpty() || !m_stylus) return;
 
-    if (Backend::isDebugMode) {
+    if (Backend::isDebugMode)
         qDebug() << "[P2P] Received" << data.size() << "bytes";
+
+    // Prepend any bytes left over from the previous call (partial packet).
+    if (!m_wifiLeftover.isEmpty()) {
+        data.prepend(m_wifiLeftover);
+        m_wifiLeftover.clear();
     }
 
-    const int packetSize = sizeof(PenPacket);
-    int offset = 0;
+    AccessoryEventData eventData;
+    int consumed = dispatchPacketBuffer(
+        reinterpret_cast<const unsigned char*>(data.constData()),
+        data.size(),
+        m_stylus,
+        eventData);
 
-    while (offset + packetSize <= data.size()) {
-        const PenPacket *packet =
-            reinterpret_cast<const PenPacket *>(data.constData() + offset);
-
-        AccessoryEventData eventData;
-        eventData.toolType = packet->toolType;
-        eventData.action   = packet->action;
-        eventData.x        = packet->x;
-        eventData.y        = packet->y;
-        eventData.pressure = static_cast<float>(packet->pressure) / 4096.0f;
-        eventData.tiltX    = packet->tiltX;
-        eventData.tiltY    = packet->tiltY;
-
-        m_stylus->handleAccessoryEventData(&eventData);
-        offset += packetSize;
-    }
+    // Save any trailing bytes that didn't form a complete packet.
+    if (consumed < data.size())
+        m_wifiLeftover = data.mid(consumed);
 }
 
 void Backend::handleBluetoothData(QByteArray data) {
     if (data.isEmpty() || !m_stylus) return;
 
-    if (Backend::isDebugMode) {
+    if (Backend::isDebugMode)
         qDebug() << "[BT] Received" << data.size() << "bytes";
+
+    // Prepend any bytes left over from the previous call (partial packet).
+    if (!m_btLeftover.isEmpty()) {
+        data.prepend(m_btLeftover);
+        m_btLeftover.clear();
     }
 
-    const int packetSize = sizeof(PenPacket);
-    int offset = 0;
-
-    while (offset + packetSize <= data.size()) {
-        const PenPacket *packet =
-            reinterpret_cast<const PenPacket *>(data.constData() + offset);
-
-        // Ignore heartbeat packets (all bytes == 127).
-        // The Android client sends these during idle to keep the connection alive.
-        bool isHeartbeat = true;
-        const uint8_t *raw = reinterpret_cast<const uint8_t *>(packet);
-        for (int i = 0; i < packetSize; ++i) {
-            if (raw[i] != 127) { isHeartbeat = false; break; }
+    // Heartbeat detection: the Android client sends all-127 bytes during idle
+    // to keep the RFCOMM connection alive. A heartbeat is exactly one framed
+    // packet in length (23 bytes for a pen packet) with every byte == 127.
+    // We check before dispatching so the dispatcher never sees them.
+    // The framed size is 23 bytes (1 type + 22 payload); 127 is not a valid
+    // packet type (only 0x01 and 0x02 are), so even if heartbeat detection
+    // misses, the dispatcher will log an unknown-type warning and skip it
+    // harmlessly.
+    {
+        constexpr int heartbeatSize = 1 + static_cast<int>(sizeof(PenPacket)); // 23
+        if (data.size() == heartbeatSize) {
+            bool isHeartbeat = true;
+            const uint8_t* raw = reinterpret_cast<const uint8_t*>(data.constData());
+            for (int i = 0; i < heartbeatSize; ++i) {
+                if (raw[i] != 127) { isHeartbeat = false; break; }
+            }
+            if (isHeartbeat) {
+                if (Backend::isDebugMode) qDebug() << "[BT] Heartbeat received, ignoring.";
+                return;
+            }
         }
-        if (isHeartbeat) { offset += packetSize; continue; }
-
-        AccessoryEventData eventData;
-        eventData.toolType = packet->toolType;
-        eventData.action   = packet->action;
-        eventData.x        = packet->x;
-        eventData.y        = packet->y;
-        eventData.pressure = static_cast<float>(packet->pressure) / 1000.0f;
-        eventData.tiltX    = packet->tiltX;
-        eventData.tiltY    = packet->tiltY;
-
-        m_stylus->handleAccessoryEventData(&eventData);
-
-        offset += packetSize;
     }
 
-    // Partial packet at end of buffer is dropped — acceptable for the same
-    // reason as in handleWifiData(): the next event arrives in < 8ms.
+    AccessoryEventData eventData;
+    int consumed = dispatchPacketBuffer(
+        reinterpret_cast<const unsigned char*>(data.constData()),
+        data.size(),
+        m_stylus,
+        eventData);
+
+    // Save any trailing bytes that didn't form a complete packet.
+    if (consumed < data.size())
+        m_btLeftover = data.mid(consumed);
 }
 
 void Backend::toggleDebug(bool enable) {
@@ -467,6 +473,9 @@ void Backend::autoConnectLoop() {
             
             // 2. Connect
             QMetaObject::invokeMethod(this, [this](){
+                m_stylus->initializeMTDevice();
+                if (!m_screenSelected && !m_screenRects.isEmpty())
+                    selectScreen(0);
                 updateStatus("Tablet found! Connecting...", true);
             });
 
@@ -474,10 +483,16 @@ void Backend::autoConnectLoop() {
             InkBridge::UsbConnection connection;
             
             qDebug() << "[AutoConnect] Engaging Capture Mode (Blocking)...";
+            QMetaObject::invokeMethod(this, [this](){
+                m_stylus->initializeMTDevice();
+            });
             // This line blocks until the device is unplugged or error occurs
             int res = connection.startCapture(deviceId.toStdString(), m_stylus);
 
             qDebug() << "[AutoConnect] <<< DISCONNECTED. Return Code:" << res;
+            QMetaObject::invokeMethod(this, [this](){
+                m_stylus->destroyMTDevice();
+            });
 
             // 3. Handle Disconnect
             QMetaObject::invokeMethod(this, [this, res](){

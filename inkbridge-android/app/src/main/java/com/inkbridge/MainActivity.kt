@@ -237,6 +237,9 @@ class MainActivity : ComponentActivity() {
             runOnUiThread {
                 val rootView = window.decorView.findViewById<View>(android.R.id.content)
                 WifiDirectService.updateView(rootView)
+                WifiDirectService.onDisconnected = {
+                    disconnectAll()
+                }
                 isConnected          = true
                 showWifiDirectDialog = false
                 statusMessage        = "Connected via WiFi Direct"
@@ -446,6 +449,7 @@ class MainActivity : ComponentActivity() {
             val success = UsbStreamService.connect(usbManager, accessory, this@MainActivity)
             withContext(Dispatchers.Main) {
                 if (success) {
+                    UsbStreamService.onDisconnected = { disconnectAll() }
                     isConnected = true
                     statusMessage = "Connected"
                 } else {
@@ -539,6 +543,7 @@ class MainActivity : ComponentActivity() {
             val success = BluetoothStreamService.connect(device, this@MainActivity)
             withContext(Dispatchers.Main) {
                 if (success) {
+                    BluetoothStreamService.onDisconnected = { disconnectAll() }
                     BluetoothStreamService.updateView(view)
                     isConnected = true
                     statusMessage = "Connected via Bluetooth"

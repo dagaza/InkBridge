@@ -113,7 +113,12 @@ Rectangle {
                     title: "6. Professional Features & Troubleshooting"
                     body: "<b>3D Tilt & The Eraser:</b><br>• <b>True 3D Tilt:</b> If your stylus supports it (like the Samsung S-Pen), InkBridge automatically calculates and projects true 3D Tilt (-90° to +90°) directly to your Linux creative suite for realistic shading.<br><br>• <b>Clean Handover Eraser:</b> If your stylus has a side button, you can confidently switch between the pen tip and the eraser mid-hover without dropping inputs.<br><br><b>The 'Reset Connection' Button:</b><br>Sometimes the Linux kernel grabs your Android device's USB port before InkBridge can. If a USB connection fails, click 'Reset Connection' in the sidebar. This forces a hardware-level reset to help InkBridge claim the device.<br><br><b>Dark Mode:</b><br>Both apps feature a beautifully themed Dark Mode. Toggle it at the bottom of this sidebar or via the theme icon in the tablet app!"
                 }
-                    
+
+                // Page 7: Canvas Gestures
+                TutorialSlide {
+                    title: "7. Canvas Gestures"
+                    body: "<br><br><b>Two-Finger Pan & Zoom:</b><br>You can navigate your canvas on the Linux desktop completely natively! Simply use two fingers to smoothly pan, zoom, and navigate around your workspace just like a native mobile app.<br><br><b>Smart Palm Rejection:</b><br>These multi-touch gestures work perfectly even if you have 'Stylus Only' mode turned on from the main menu. InkBridge intelligently ignores accidental single-finger palm rests, but instantly recognizes intentional two-finger canvas navigation."
+                }
             }
             
 
@@ -157,7 +162,7 @@ Rectangle {
                     leftPadding: backBtn.visible ? 0 : 115 // Keep dots centered when Back is hidden
 
                     Repeater {
-                        model: 6 // Changed from 4 to 7 to match slide count
+                        model: 7 // Changed from 4 to 7 to match slide count
                         Rectangle {
                             width: index === currentPage ? 20 : 8
                             height: 8
@@ -172,7 +177,7 @@ Rectangle {
                 // Next / Finish Button
                 Button {
                     id: nextBtn
-                    text: currentPage < 5 ? "Next" : "Start Drawing"
+                    text: currentPage < 6 ? "Next" : "Start Drawing"
                     Layout.preferredWidth: 140
                     Layout.preferredHeight: 46
                     
@@ -199,7 +204,7 @@ Rectangle {
                     }
                     
                     onClicked: {
-                        if (currentPage < 5) currentPage++ // Changed from 3 to 6
+                        if (currentPage < 6) currentPage++ // Changed from 3 to 6
                         else {
                             currentPage = 0 // Reset
                             tutorialRoot.closed()
