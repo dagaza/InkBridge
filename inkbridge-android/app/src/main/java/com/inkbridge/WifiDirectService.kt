@@ -237,6 +237,7 @@ object WifiDirectService {
 
     // ---------------------------------------------------------------------------
     // Step 4: Scan P2P subnet for desktop TCP server
+    // (RESTORED TO ORIGINAL WORKING 40-THREAD POOL THROTTLE)
     // ---------------------------------------------------------------------------
 
     private fun scanAndConnect() {
@@ -245,7 +246,7 @@ object WifiDirectService {
 
         val candidates = (2..254).map { "$P2P_SUBNET.$it" }
         
-        // Create a pool of 40 threads to scan IPs concurrently
+        // Reverted: Create a pool of 40 threads to scan IPs concurrently safely
         val executor = java.util.concurrent.Executors.newFixedThreadPool(40)
         var connectionSuccessful = false
 
