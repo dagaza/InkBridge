@@ -356,7 +356,7 @@ void Backend::handleBluetoothData(QByteArray data) {
         eventData.action   = packet->action;
         eventData.x        = packet->x;
         eventData.y        = packet->y;
-        eventData.pressure = static_cast<float>(packet->pressure) / 1000.0f;
+        eventData.pressure = static_cast<float>(packet->pressure) / 4096.0f;
         eventData.tiltX    = packet->tiltX;
         eventData.tiltY    = packet->tiltY;
 
