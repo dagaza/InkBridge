@@ -8,17 +8,16 @@ import android.util.Log
 import android.view.View
 import java.io.FileDescriptor
 import java.io.FileOutputStream
-import java.io.IOException
 import java.io.OutputStream
-import java.util.concurrent.LinkedBlockingQueue
-import java.util.concurrent.TimeUnit
 
 object UsbStreamService {
 
     private const val TAG = "InkBridgeUsbService"
     private var fileDescriptor: ParcelFileDescriptor? = null
     private var workerThread: Thread? = null
-    private var queue = LinkedBlockingQueue<ByteArray>()
+    
+    // Using the zero-allocation circular buffer
+    private val ringBuffer = PacketRingBuffer(16)
 
     @Volatile private var isStreamOpen = false
     private var currentListener: TouchListener? = null
@@ -54,7 +53,7 @@ object UsbStreamService {
             val rawOutputStream = FileOutputStream(fd)
 
             isStreamOpen = true
-            queue.clear()
+            ringBuffer.clear()
 
             workerThread = Thread {
                 writeLoop(rawOutputStream)
@@ -65,10 +64,11 @@ object UsbStreamService {
 
             val queueWrapper = object : OutputStream() {
                 override fun write(b: Int) { /* Unused */ }
+                override fun write(b: ByteArray, off: Int, len: Int) {
+                    ringBuffer.write(b, off, len)
+                }
                 override fun write(b: ByteArray) {
-                    if (!queue.offer(b)) {
-                        // Queue full, packet dropped (backpressure)
-                    }
+                    ringBuffer.write(b, 0, b.size)
                 }
             }
 
@@ -92,11 +92,10 @@ object UsbStreamService {
 
         while (isStreamOpen) {
             try {
-                val packet = queue.poll(500, TimeUnit.MILLISECONDS)
-
-                if (packet != null) {
-                    stream.write(packet)
-                } else {
+                // Waits up to 500ms for data, drains it instantly if available
+                val hasData = ringBuffer.waitForDataAndDrain(stream, 500)
+                
+                if (!hasData) {
                     stream.write(heartbeat)
                 }
             } catch (e: Exception) {
@@ -124,7 +123,7 @@ object UsbStreamService {
             fileDescriptor?.close()
         } catch (e: Exception) {}
         fileDescriptor = null
-        queue.clear()
+        ringBuffer.clear()
         Log.d(TAG, "Stream Closed.")
     }
 }

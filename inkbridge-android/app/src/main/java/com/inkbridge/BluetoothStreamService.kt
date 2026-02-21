@@ -8,12 +8,9 @@ import android.content.Context
 import android.util.Log
 import android.view.View
 import java.io.BufferedOutputStream
-import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.OutputStream
 import java.util.UUID
-import java.util.concurrent.LinkedBlockingQueue
-import java.util.concurrent.TimeUnit
 
 object BluetoothStreamService {
 
@@ -23,11 +20,13 @@ object BluetoothStreamService {
     private const val PACKET_SIZE = 22
     private val HEARTBEAT = ByteArray(PACKET_SIZE) { 127.toByte() }
     private const val OUTPUT_BUFFER_SIZE = PACKET_SIZE * 16
-    private const val MAX_QUEUE_SIZE = 12
 
     private var socket: BluetoothSocket? = null
     private var workerThread: Thread? = null
-    private val queue = LinkedBlockingQueue<ByteArray>(MAX_QUEUE_SIZE)
+    
+    // Using the zero-allocation circular buffer
+    private val ringBuffer = PacketRingBuffer(16)
+    
     @Volatile private var isStreamOpen = false
     private var currentListener: TouchListener? = null
 
@@ -54,7 +53,7 @@ object BluetoothStreamService {
 
             socket = btSocket
             isStreamOpen = true
-            queue.clear()
+            ringBuffer.clear()
 
             workerThread = Thread {
                 writeLoop(bufferedStream)
@@ -66,12 +65,14 @@ object BluetoothStreamService {
 
             val queueWrapper = object : OutputStream() {
                 override fun write(b: Int) { /* unused */ }
+                override fun write(b: ByteArray, off: Int, len: Int) {
+                    ringBuffer.write(b, off, len)
+                }
                 override fun write(b: ByteArray) {
-                    queue.offer(b)
+                    ringBuffer.write(b, 0, b.size)
                 }
             }
 
-            // Read preference once at connection time — not per-event
             val stylusOnly = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
                 .getBoolean("stylus_only", false)
             currentListener = TouchListener(queueWrapper, stylusOnly)
@@ -100,7 +101,7 @@ object BluetoothStreamService {
 
         try { socket?.close() } catch (_: Exception) {}
         socket = null
-        queue.clear()
+        ringBuffer.clear()
 
         Log.d(TAG, "Bluetooth stream closed.")
     }
@@ -136,33 +137,17 @@ object BluetoothStreamService {
     }
 
     private fun writeLoop(stream: BufferedOutputStream) {
-        val batchBuffer = ByteArrayOutputStream(OUTPUT_BUFFER_SIZE)
-        val drainBatch = ArrayList<ByteArray>(MAX_QUEUE_SIZE)
-
         while (isStreamOpen) {
             try {
-                val first = queue.poll(100, TimeUnit.MILLISECONDS)
-
-                if (first != null) {
-                    drainBatch.clear()
-                    drainBatch.add(first)
-                    queue.drainTo(drainBatch)
-
-                    batchBuffer.reset()
-                    for (packet in drainBatch) {
-                        batchBuffer.write(packet)
-                    }
-
-                    stream.write(batchBuffer.toByteArray())
-                    stream.flush()
-
-                    if (DEBUG && drainBatch.size > 1) {
-                        Log.d(TAG, "Batched ${drainBatch.size} packets in one write")
-                    }
-                } else {
+                // Waits up to 100ms for data, drains it instantly if available
+                val hasData = ringBuffer.waitForDataAndDrain(stream, 100)
+                
+                if (!hasData) {
                     stream.write(HEARTBEAT)
-                    stream.flush()
                 }
+                
+                // CRUCIAL: Must flush the BufferedOutputStream to send over Bluetooth
+                stream.flush()
 
             } catch (e: Exception) {
                 Log.e(TAG, "Bluetooth write loop error: ${e.message}")
